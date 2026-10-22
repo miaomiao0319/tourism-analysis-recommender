@@ -1,0 +1,52 @@
+# 共享提交边界；修改须按 AGENTS.md 与 docx/git-workflow.md 获得具体人工批准。
+# 忽略规则不清除已跟踪文件或历史秘密，也不代表允许删除本地文件。
+
+# 本地配置；保留可公开的配置模板。
+.env
+.env.*
+!.env.example
+
+# 本地工具、Hadoop 配置/持久数据、运行记录与 Python 环境。
+.runtime/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.scrapy/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+htmlcov/
+
+# 前端依赖、构建结果及工具缓存；不忽略声明和锁文件。
+node_modules/
+dist/
+build/
+*.egg-info/
+.vite/
+coverage/
+
+# 批次原始数据、标准快照、元数据和计算结果默认留在本地。
+# samples 仅提供可提交入口；真实样本须确认可公开且可追溯，构造样本须标记 test。
+# 不能仅因文件位于 samples 就认定获得公开许可；不整体忽略 CSV/JSON/SQL 等格式。
+/data/*
+!/data/samples/
+
+# 本地下载、备份、数据库持久文件与日志；数据库结构和初始化 SQL 仍可提交。
+/downloads/
+/backups/
+/database/data/
+/database/backups/
+/logs/
+*.log
+
+# 操作系统与编辑器临时文件。
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
+*.swo
