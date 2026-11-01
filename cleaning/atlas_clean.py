@@ -216,7 +216,7 @@ def build(tables, requests, raw_ref, batch_id, reference=None):
     return output, evidence, excluded, identity_map, dictionaries, issues, suspected
 
 
-def validate(rows, evidence, dictionaries, manifest):
+def validate(rows, evidence, dictionaries, manifest, price_validator=None):
     """Reject inconsistent snapshots rather than emitting usable-looking output."""
     ev = {r["source_ref"] for r in evidence}
     regions = {r["key"]: r for r in dictionaries["regions"]}
@@ -245,7 +245,9 @@ def validate(rows, evidence, dictionaries, manifest):
                 raise ValueError("Invalid rated grade")
         elif row["grade_status"] not in ("unknown", "conflict") or row["grade_level"] or row["grade_system"] != "UNKNOWN":
             raise ValueError("Invalid unknown/conflicting grade")
-        if row["price_form"] != "unknown" or any(row[f] for f in ("price_min", "price_max", "currency", "price_basis", "price_policy_id", "price_raw")):
+        if price_validator:
+            price_validator(row, evidence, dictionaries)
+        elif row["price_form"] != "unknown" or any(row[f] for f in ("price_min", "price_max", "currency", "price_basis", "price_policy_id", "price_raw")):
             raise ValueError("This source cannot justify a price")
         refs = row["source_refs"]
         if not {"name", "location"} <= refs.keys() or set(refs) - {"name", "location", "grade", "types", "price"}:
