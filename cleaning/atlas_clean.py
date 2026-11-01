@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crawler.atlas_collect import PROVINCES, read_csv
+from cleaning.city_reference import CityReference
+from cleaning.relation_audit import review
 
 ROOT = Path(__file__).resolve().parents[1]
 FIELDS = "batch_id attraction_id name country_code province_key province_name city_key city_name grade_system grade_status grade_level type_codes price_form price_min price_max currency price_basis price_policy_id price_raw source_refs collected_at".split()
@@ -39,7 +41,7 @@ def dump_lines(path, rows):
             stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
 
 
-def build(tables, requests, raw_ref, batch_id):
+def build(tables, requests, raw_ref, batch_id, reference=None):
     """Pure transform; inputs stay unchanged. Return rows and all audit evidence."""
     entities, evidence, excluded = {}, [], []
     atlas_names = defaultdict(set)
@@ -101,6 +103,8 @@ def build(tables, requests, raw_ref, batch_id):
                     if city:
                         crosswalk[(entity["code"], city)][prefecture].add(observation["ref"])
 
+    if reference:
+        evidence.extend(reference.evidence)
     ev_by_ref = {row["source_ref"]: row for row in evidence}
     regions = {"CN:" + code: {"key": "CN:" + code, "name": name, "country_code": "CN",
                               "level": "province", "parent_key": None}
@@ -136,6 +140,21 @@ def build(tables, requests, raw_ref, batch_id):
                     mapping = crosswalk.get((code, original_city), {})
                     for city, supporting in mapping.items():
                         city_candidates[city].update(supporting)
+        if reference:
+            exact = [reference.lookup(code, city, english=True) for city in raw_cities]
+            exact = [item for item in exact if item]
+            if exact:
+                city_candidates = defaultdict(set)
+                for name, ref in exact:
+                    city_candidates[name].add(ref)
+            else:
+                normalized = defaultdict(set)
+                for name, supporting in city_candidates.items():
+                    matched = reference.lookup(code, name)
+                    normalized[matched[0] if matched else name].update(supporting)
+                    if matched:
+                        normalized[matched[0]].add(matched[1])
+                city_candidates = normalized
         # Municipalities are both provincial and city-level units; no capital guessing.
         if code in ("110000", "120000", "310000", "500000"):
             city_candidates = {PROVINCES[code] + "市": set(refs)}
@@ -146,7 +165,7 @@ def build(tables, requests, raw_ref, batch_id):
             city_key = "CN:" + code + ":" + digest(city_name)
             item = regions.setdefault(city_key, {"key": city_key, "name": city_name, "country_code": "CN",
                     "level": "city", "parent_key": "CN:" + code,
-                    "basis": "Publisher place/prefecture associations and unique province/original-city crosswalk; geographic rule, not identity merging or an official division-code registry",
+                    "basis": "Province-bound unique pinyin/Chinese match to cn-divisions reference where available, otherwise publisher prefecture association; not an official current registry" if reference else "Publisher place/prefecture associations; not identity merging or an official registry",
                     "source_refs": []})
             item["source_refs"] = sorted(set(item["source_refs"]) | city_refs)
         else:
@@ -234,7 +253,7 @@ def validate(rows, evidence, dictionaries, manifest):
         raise ValueError("Entity counts do not reconcile")
 
 
-def clean(raw_dir, batch_id, root=ROOT):
+def clean(raw_dir, batch_id, root=ROOT, reference_dir=None):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", batch_id):
         raise ValueError("Invalid batch ID")
     root, raw_dir = root.resolve(), raw_dir.resolve()
@@ -254,6 +273,21 @@ def clean(raw_dir, batch_id, root=ROOT):
         tables[kind] = read_csv((raw_dir / (kind + ".raw")).read_bytes(), required + ["region_id", "name_zh"])
         if len(tables[kind]) != run["files"][kind]["row_count"]:
             raise ValueError("Acquisition CSV row counts changed")
+    reference, reference_inputs = None, []
+    if reference_dir:
+        reference_dir = reference_dir.resolve()
+        relative = reference_dir.relative_to(root).as_posix()
+        supplement = json.loads((reference_dir / "run.json").read_text(encoding="utf-8"))
+        if supplement["status"] != "success" or supplement.get("package_version") != "0.1.3":
+            raise ValueError("Successful pinned city reference required")
+        for item in supplement["requests"] + supplement["members"]:
+            path = (reference_dir / item["raw_ref"]).resolve()
+            if not path.is_relative_to(reference_dir) or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                raise ValueError("Reference integrity mismatch")
+            reference_inputs.append(dict(path=relative + "/" + item["raw_ref"], sha256=item["sha256"]))
+        meta = next(item for item in supplement["requests"] if item["raw_ref"] == "package.raw")
+        divisions = [json.loads(line) for line in (reference_dir / "divisions.raw").read_text(encoding="utf-8").splitlines()]
+        reference = CityReference(divisions, meta, relative)
     processed, metadata = root / "data/processed" / batch_id, root / "data/metadata" / batch_id
     if processed.exists() or metadata.exists():
         raise FileExistsError("Batch already exists; choose a new batch ID")
@@ -262,7 +296,8 @@ def clean(raw_dir, batch_id, root=ROOT):
               "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
               "tool": "Python standard library; unified WSL/Python3.11 environment not verified"}
     try:
-        rows, evidence, excluded, identity_map, dictionaries, issues, suspected = build(tables, requests, raw_ref, batch_id)
+        rows, evidence, excluded, identity_map, dictionaries, issues, suspected = build(tables, requests, raw_ref, batch_id, reference)
+        relation_reviews = review(suspected, identity_map, evidence)
         count = sum(len(v) for v in tables.values())
         quality = {"missing_city_count": sum(not r["city_key"] for r in rows),
                    "unknown_grade_count": sum(r["grade_status"] == "unknown" for r in rows),
@@ -276,6 +311,7 @@ def clean(raw_dir, batch_id, root=ROOT):
                    "exclusion_reasons": dict(Counter(r["reason"] for r in excluded)),
                    "issue_counts": dict(Counter(issue for values in issues.values() for issue in values)),
                    "suspected_duplicate_groups": suspected,
+                   "relationship_triage_counts": dict(Counter(r["triage"] for r in relation_reviews)),
                    "map_unmatched_count": len(rows),
                    "notes": ["Secondary source grades; no independent official verification", "Publisher checked dates are not historical validity dates", "Heritage-only sites remain candidates with opening status unverified", "No price or budget eligibility; no approved price policy", "5A links merge only with same province and identical normalized Chinese name; broader destinations remain separate linked candidates", "Unmapped cities are blank; dictionary prefecture labels may be abbreviated", "City crosswalk derives geographic associations; it does not assert attraction identity or official administrative codes"]}
         manifest = {"contract_version": "1.0", "batch_id": batch_id, "data_kind": run["data_kind"],
@@ -285,6 +321,10 @@ def clean(raw_dir, batch_id, root=ROOT):
                     "raw_inputs": [{"path": raw_ref + "/" + r["raw_ref"], "sha256": r["sha256"]}
                                    for r in run["requests"]], "quality": quality,
                     "input_roles": {"sites": "attraction observations", "featured": "attraction observations", "5a": "attraction observations", "regions": "acquired reference, not attraction observations"}}
+        manifest["raw_inputs"].extend(reference_inputs)
+        manifest["dictionary_reference_observation_count"] = len(reference.evidence) if reference else 0
+        if reference:
+            quality["notes"].append("cn-divisions 0.1.3 MIT reference: province-bound unique pinyin/Chinese aliases; upstream snapshot date undocumented, at least 2023-04")
         validate(rows, evidence, dictionaries, manifest)
         if quality["covered_province_count"] != 31 and run["data_kind"] == "real":
             raise ValueError("Real nationwide batch lost target province coverage")
@@ -299,6 +339,7 @@ def clean(raw_dir, batch_id, root=ROOT):
         dump_lines(metadata / "evidence.jsonl", evidence)
         dump_lines(metadata / "excluded.jsonl", excluded)
         dump_lines(metadata / "entity-map.jsonl", identity_map)
+        dump_lines(metadata / "relationship-audit.jsonl", relation_reviews)
         dump_lines(metadata / "quality-records.jsonl", ({"attraction_id": aid, "issues": sorted(values)} for aid, values in sorted(issues.items())))
         dump_lines(metadata / "sources.jsonl", ({"source_id": "atlas_" + kind, "name": "Atlas of China / " + kind,
             "base_url": requests[kind]["url"], "coverage": "Mainland 31 regions; other regions excluded with reasons",
@@ -306,6 +347,15 @@ def clean(raw_dir, batch_id, root=ROOT):
             "redistribution_status": "allowed", "license": "CC BY 4.0",
             "attribution": "Atlas of China — https://www.atlasofchina.com/data/",
             "notes": "Attribution required; fields changed by documented cleaning; secondary publisher, not official certification"} for kind in KINDS))
+        if reference:
+            license_text = (reference_dir / "license.raw").read_text(encoding="utf-8")
+            (metadata / "reference-MIT-LICENSE.txt").write_text(license_text, encoding="utf-8", newline="\n")
+            with (metadata / "sources.jsonl").open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(dict(source_id="cn_divisions", name="Roy Tian / cn-divisions 0.1.3",
+                    base_url=meta["url"], coverage="Province-bound prefecture references, excludes promoted six-digit counties",
+                    collection_basis="Public fixed-version npm distribution, integrity verified; data compilation MIT",
+                    redistribution_status="allowed", license="MIT", attribution="Copyright (c) 2026 Roy Tian; see reference-MIT-LICENSE.txt",
+                    notes="Upstream date undocumented, at least 2023-04; not a current official registry or historical validity proof"), ensure_ascii=False) + "\n")
         manifest.update(standard_file=standard.relative_to(root).as_posix(),
                         standard_sha256=hashlib.sha256(standard.read_bytes()).hexdigest(),
                         dictionaries_sha256=hashlib.sha256((metadata / "dictionaries.json").read_bytes()).hexdigest())
@@ -335,7 +385,7 @@ def clean(raw_dir, batch_id, root=ROOT):
 
 1. 校验采集正文摘要；原始文件未改写。
 2. 名称去首尾空白，换行和制表符替换为空格；保留有效标点。省份按原始地区代码对应。
-3. 原始城市名按省份区分。利用来源关联的中文地级名称建立字典，仅采用唯一对应；有歧义或无法确认时留空，原文在evidence中保留。该字典仍需补充核实，不是官方区划代码表。
+3. 原始城市名按省份区分。提供行政区划参考时，采用同省份内唯一的拼音或中文别名对应，补充中文全称；未提供或无法匹配时保留来源关联字典。有歧义或无法确认时留空，原文在evidence中保留。参考汇编版本和日期限制见sources与manifest，不是2026年10月官方现行区划证明。
 4. 同来源条目标识保持实体稳定；5A名录只有关联标识、省份、规范化中文名均一致时才合并。景区与内部景点、不同地点同名景点分别保留。来源链接但名称不同的记录只标记待核实关系。
 5. 来源类别保留为4类来源分类。单一A级标签按来源登记；多等级标记冲突，未提供等级记未知；文保身份不转成A级。
 6. 本来源无票价：price_form=unknown，金额、币种和比较政策留空，不参与保证满足预算的推荐。
@@ -356,6 +406,7 @@ def clean(raw_dir, batch_id, root=ROOT):
 - evidence.jsonl：原始记录、URL、采集时间及逻辑CSV行定位。
 - excluded.jsonl：每条排除记录及原因；entity-map.jsonl：来源观察与实体标识的对应关系。
 - dictionaries.json：地区、类型和等级字典；quality-records.jsonl：逐实体问题清单。
+- relationship-audit.jsonl：逐组关联关系筛查；词形相似或组合地点提示只用于复核，不是同一实体的确认。
 
 | 省级地区 | 标准化候选记录 |
 | --- | ---: |
@@ -376,7 +427,7 @@ def clean(raw_dir, batch_id, root=ROOT):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: python -m cleaning.atlas_clean RAW_DIRECTORY NEW_BATCH_ID")
-    result = clean(Path(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("Usage: python -m cleaning.atlas_clean RAW_DIRECTORY NEW_BATCH_ID [CITY_REFERENCE_DIRECTORY]")
+    result = clean(Path(sys.argv[1]), sys.argv[2], reference_dir=Path(sys.argv[3]) if len(sys.argv) == 4 else None)
     print(json.dumps({key: result[key] for key in ("batch_id", "raw_count", "excluded_count", "merged_extra_count", "standard_count")}, ensure_ascii=True))
