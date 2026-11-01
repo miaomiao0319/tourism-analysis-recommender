@@ -13,6 +13,14 @@ from pathlib import Path
 from crawler.sample_collect import AGENT, robots_allows, write_json
 
 SPECS = {
+    "voyage_baoshan": ("https://en.wikivoyage.org", [
+        ("license", "/wiki/Wikivoyage:Copyleft"),
+        ("baoshan", "/wiki/Shanghai/Baoshan")], "creativecommons.org/licenses/by-sa/4.0"),
+    "voyage_shanghai": ("https://en.wikivoyage.org", [
+        ("license", "/wiki/Wikivoyage:Copyleft"),
+        ("baoshan", "/wiki/Shanghai/Baoshan"),
+        ("pudong", "/wiki/Shanghai/Pudong"),
+        ("huangpu", "/wiki/Shanghai/Huangpu")], "creativecommons.org/licenses/by-sa/4.0"),
     "atlas_scopes": ("https://www.atlasofchina.com", [
         ("license", "/data/"), ("places", "/data/places.json"),
         ("sites", "/data/sites.json")], "CC BY 4.0"),
