@@ -13,6 +13,18 @@ from pathlib import Path
 from crawler.sample_collect import AGENT, robots_allows, write_json
 
 SPECS = {
+    "atlas_scopes": ("https://www.atlasofchina.com", [
+        ("license", "/data/"), ("places", "/data/places.json"),
+        ("sites", "/data/sites.json")], "CC BY 4.0"),
+    "geo_wikidata": ("https://www.wikidata.org", [
+        ("license", "/wiki/Wikidata:Licensing"),
+        *[(qid, "/wiki/Special:EntityData/" + qid + ".json") for qid in
+          ("Q16959", "Q571219", "Q573124", "Q989885", "Q874291", "Q571126", "Q1012419", "Q577713", "Q115594", "Q861035", "Q1012460")]], "CC0"),
+    "voyage_prices": ("https://en.wikivoyage.org", [
+        ("license", "/wiki/Wikivoyage:Copyleft"),
+        ("jiuzhaigou", "/wiki/Jiuzhaigou_Nature_Reserve"),
+        ("huangshan", "/wiki/Huangshan"),
+        ("mount_tai", "/wiki/Mount_Tai")], "creativecommons.org/licenses/by-sa/4.0"),
     "divisions_npm": ("https://registry.npmjs.org", [
         ("metadata", "/cn-divisions/0.1.3"),
         ("package", "/cn-divisions/-/cn-divisions-0.1.3.tgz")], "MIT"),

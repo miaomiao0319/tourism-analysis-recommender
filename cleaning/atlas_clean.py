@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crawler.atlas_collect import PROVINCES, read_csv
-from cleaning.city_reference import CityReference
+from cleaning.city_reference import CityReference, roman
 from cleaning.relation_audit import review
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +125,10 @@ def build(tables, requests, raw_ref, batch_id, reference=None):
                 grades.add("5A")
                 if text(raw.get("prefecture", "")):
                     city_candidates[text(raw["prefecture"])].add(o["ref"])
+                elif reference:
+                    matched = reference.lookup_prefix(code, o["name"])
+                    if matched:
+                        city_candidates[matched[0]].update((matched[1], o["ref"]))
             else:
                 grades.update(token.strip() for token in raw["designations"].split(";")
                               if re.fullmatch("[1-5]A", token.strip()))
@@ -155,6 +159,9 @@ def build(tables, requests, raw_ref, batch_id, reference=None):
                     if matched:
                         normalized[matched[0]].add(matched[1])
                 city_candidates = normalized
+        if all(o["kind"] == "featured" for o in observations):
+            city_candidates = {}
+            issues[aid].add("gateway_city_not_verified_attraction_location")
         # Municipalities are both provincial and city-level units; no capital guessing.
         if code in ("110000", "120000", "310000", "500000"):
             city_candidates = {PROVINCES[code] + "市": set(refs)}
@@ -192,7 +199,7 @@ def build(tables, requests, raw_ref, batch_id, reference=None):
         identity_map.append({"attraction_id": aid, "publisher_identity": entity["identity"],
                              "source_refs": refs, "name_aliases": sorted(names), "original_city_labels": sorted(raw_cities),
                              "merge_basis": "Atlas item ID; 5A joins only with explicit link + same province + identical normalized Chinese name; otherwise isolated mct_id"})
-        name_groups[(code, city_key or tuple(sorted(raw_cities)), row["name"])].append(aid)
+        name_groups[(code, tuple(sorted(raw_cities)) or city_key, row["name"])].append(aid)
     suspected = [list(ids) for ids in sorted({tuple(group) for group in linked_groups})]
     suspected += [ids for ids in name_groups.values() if len(ids) > 1]
     for group in suspected:
@@ -253,7 +260,7 @@ def validate(rows, evidence, dictionaries, manifest):
         raise ValueError("Entity counts do not reconcile")
 
 
-def clean(raw_dir, batch_id, root=ROOT, reference_dir=None):
+def clean(raw_dir, batch_id, root=ROOT, reference_dir=None, geo_alias_dir=None):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", batch_id):
         raise ValueError("Invalid batch ID")
     root, raw_dir = root.resolve(), raw_dir.resolve()
@@ -287,7 +294,27 @@ def clean(raw_dir, batch_id, root=ROOT, reference_dir=None):
             reference_inputs.append(dict(path=relative + "/" + item["raw_ref"], sha256=item["sha256"]))
         meta = next(item for item in supplement["requests"] if item["raw_ref"] == "package.raw")
         divisions = [json.loads(line) for line in (reference_dir / "divisions.raw").read_text(encoding="utf-8").splitlines()]
-        reference = CityReference(divisions, meta, relative)
+        wanted = {(r["region_id"], roman(r["city"])) for kind in ("sites", "featured") for r in tables[kind] if r["city"]}
+        wanted_names = {(r["region_id"], text(r["name_zh"])) for r in tables["5a"] if not r.get("prefecture")}
+        reference = CityReference(divisions, meta, relative, wanted, wanted_names)
+        if geo_alias_dir:
+            geo_alias_dir = geo_alias_dir.resolve()
+            alias_relative = geo_alias_dir.relative_to(root).as_posix()
+            alias_run = json.loads((geo_alias_dir / "run.json").read_text(encoding="utf-8"))
+            if alias_run["status"] != "success" or alias_run["supplement_kind"] != "geo_wikidata":
+                raise ValueError("Successful Wikidata geography acquisition required")
+            wanted_names = {(r["region_id"], r["city"]) for kind in ("sites", "featured") for r in tables[kind] if r["city"]}
+            seen_qids = set()
+            for item in alias_run["requests"]:
+                path = (geo_alias_dir / item["raw_ref"]).resolve()
+                if not path.is_relative_to(geo_alias_dir) or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                    raise ValueError("Geographic alias input changed")
+                reference_inputs.append(dict(path=alias_relative + "/" + item["raw_ref"], sha256=item["sha256"]))
+                if item["raw_ref"].startswith("Q"):
+                    entity = next(iter(json.loads(path.read_bytes())["entities"].values()))
+                    if entity["id"] not in seen_qids:
+                        reference.add_wikidata(entity, item, alias_relative + "/" + item["raw_ref"], wanted_names)
+                        seen_qids.add(entity["id"])
     processed, metadata = root / "data/processed" / batch_id, root / "data/metadata" / batch_id
     if processed.exists() or metadata.exists():
         raise FileExistsError("Batch already exists; choose a new batch ID")
@@ -325,6 +352,7 @@ def clean(raw_dir, batch_id, root=ROOT, reference_dir=None):
         manifest["dictionary_reference_observation_count"] = len(reference.evidence) if reference else 0
         if reference:
             quality["notes"].append("cn-divisions 0.1.3 MIT reference: province-bound unique pinyin/Chinese aliases; upstream snapshot date undocumented, at least 2023-04")
+        quality["notes"].append("Featured export city is a stay/gateway city, not verified attraction location; gateway-only inferred locations are blank outside municipalities")
         validate(rows, evidence, dictionaries, manifest)
         if quality["covered_province_count"] != 31 and run["data_kind"] == "real":
             raise ValueError("Real nationwide batch lost target province coverage")
@@ -356,6 +384,11 @@ def clean(raw_dir, batch_id, root=ROOT, reference_dir=None):
                     collection_basis="Public fixed-version npm distribution, integrity verified; data compilation MIT",
                     redistribution_status="allowed", license="MIT", attribution="Copyright (c) 2026 Roy Tian; see reference-MIT-LICENSE.txt",
                     notes="Upstream date undocumented, at least 2023-04; not a current official registry or historical validity proof"), ensure_ascii=False) + "\n")
+                if geo_alias_dir:
+                    stream.write(json.dumps(dict(source_id="wikidata_geography", name="Wikidata structured geographic labels",
+                        base_url="https://www.wikidata.org/wiki/Special:EntityData/", coverage="Bounded prefecture entities",
+                        collection_basis="Robots-allowed EntityData JSON; Wikidata structured data CC0", redistribution_status="allowed",
+                        license="CC0", attribution="Wikidata contributors", notes="Country Q148 and P442 code cross-checked; reference only"), ensure_ascii=False) + "\n")
         manifest.update(standard_file=standard.relative_to(root).as_posix(),
                         standard_sha256=hashlib.sha256(standard.read_bytes()).hexdigest(),
                         dictionaries_sha256=hashlib.sha256((metadata / "dictionaries.json").read_bytes()).hexdigest())
@@ -427,7 +460,8 @@ def clean(raw_dir, batch_id, root=ROOT, reference_dir=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 4):
-        raise SystemExit("Usage: python -m cleaning.atlas_clean RAW_DIRECTORY NEW_BATCH_ID [CITY_REFERENCE_DIRECTORY]")
-    result = clean(Path(sys.argv[1]), sys.argv[2], reference_dir=Path(sys.argv[3]) if len(sys.argv) == 4 else None)
+    if len(sys.argv) not in (3, 4, 5):
+        raise SystemExit("Usage: python -m cleaning.atlas_clean RAW_DIRECTORY NEW_BATCH_ID [CITY_REFERENCE_DIRECTORY [GEO_ALIAS_DIRECTORY]]")
+    result = clean(Path(sys.argv[1]), sys.argv[2], reference_dir=Path(sys.argv[3]) if len(sys.argv) >= 4 else None,
+                   geo_alias_dir=Path(sys.argv[4]) if len(sys.argv) == 5 else None)
     print(json.dumps({key: result[key] for key in ("batch_id", "raw_count", "excluded_count", "merged_extra_count", "standard_count")}, ensure_ascii=True))
