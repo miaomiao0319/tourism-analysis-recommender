@@ -37,8 +37,8 @@
 | 当前阶段 | **M1：来源、共同样本与基础模块，in_progress**。M0文档PR已由维护者合并至共同主线；A来源验证完成，采集清洗已有真实运行，统一环境和共同样本交付尚缺。 |
 | 已有产物 | 规范基线、来源与补充采集程序、清洗程序及28项测试；当前真实候选批次atlas_clean_20261102_02含8431条、覆盖31地区，附证据、字典与质量对账。用户批准上一轮具体票价方案后，新增龟蒙独立实体及70元基础入园票试点，未据此声明数据库、大数据计算或网页通过。 |
 | 文档验收记录 | 前期逐份验收继续有效；2026-10-21 用户对包含统一同步及 project、git-workflow、milestones、CLAUDE 现有基线确认的请求明确要求“开始统一整理吧”，据此补齐 M0-D01/D07/D08/D12 的确认记录。 |
-| Git 状态 | 最近成功fetch记录origin/main=b178923，维护者miaomiao0319已合并[PR #1](https://github.com/miaomiao0319/tourism-analysis-recommender/pull/1)。A实现分支feat/a-sample-collection已包含该已知主线；本轮开工HEAD=5a4ccba，本地领先已知origin/main七个提交。2026-11-02 fetch因127.0.0.1代理连接失败，未核实最新远端；继续本地提交，不重试此前自动审查拒绝的推送。 |
-| 开工同步规则 | 按README、AGENTS及Git规范执行；本轮fetch失败，不能声明已与最新远端同步。HEAD包含已知origin/main；继续不依赖远端更新的本地清洗与验证，交付限制如实记录。 |
+| Git 状态 | 本轮系统网络环境只读fetch成功，origin/main仍为b178923，维护者已合并[PR #1](https://github.com/miaomiao0319/tourism-analysis-recommender/pull/1)。A分支已包含该主线；数据库、HDFS及查询等本地代码提交为97d8a69，未推送，不重试此前自动审查拒绝的推送。 |
+| 开工同步规则 | 按README、AGENTS及Git规范执行；本轮fetch所得origin/main已包含在工作分支中，无需合并；未发现B/C远端任务分支。 |
 | 实施状态 | 采集、首轮清洗、城市参考补充及本地验证已实际运行；统一Python3.11/WSL、HDFS/YARN、MapReduce、Spark、MySQL及网页仍无本项目运行通过证据。 |
 | 实际主/备用来源、有效景点数量、地区覆盖 | 主源Atlas of China真实批量采集通过；备用/补充Wikidata CC0及张家口CC BY 4.0已有真实样本。8431为标准化候选记录、31地区，278条城市留空（含无地级上级及中转地语义问题）、354组关系继续保守核验；龟蒙和朝阳凤凰山共2条票价获政策资格，8429条价格未知，不称为已核实独立景点总数。 |
 | 项目截止日期、阶段日期 | 未确定。 |
