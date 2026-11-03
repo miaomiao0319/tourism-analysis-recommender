@@ -9,8 +9,11 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
 SCOPES = {
+    'all': {'scope'},
+    'province': {'scope', 'country_code', 'province_key'},
     'city': {'scope', 'country_code', 'city_key'},
     'grade': {'scope', 'country_code', 'grade_system', 'grade_status', 'grade_level'},
+    'city_grade': {'scope', 'country_code', 'city_key', 'grade_system', 'grade_status', 'grade_level'},
 }
 
 
@@ -25,7 +28,9 @@ def validate_run_identity(manifest, mapreduce_run, spark_run):
     """Check explicitly named contract fields; not a full run audit."""
     batch = manifest.get('batch_id')
     digest = manifest.get('standard_sha256')
-    if not isinstance(batch, str) or not batch or not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+    if (not isinstance(batch, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', batch)
+            or manifest.get('contract_version') != '1.0'
+            or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)):
         raise ValueError('Invalid batch identity or input SHA-256')
     for run, engine in ((mapreduce_run, 'mapreduce'), (spark_run, 'spark_sql')):
         if (run.get('batch_id') != batch or run.get('engine') != engine
@@ -33,6 +38,20 @@ def validate_run_identity(manifest, mapreduce_run, spark_run):
                 or run.get('input_sha256') != digest):
             raise ValueError('Run batch, engine, contract or input SHA-256 mismatch')
     return {'batch_id': batch, 'input_identity': 'matched', 'full_run_audit': False}
+
+
+def verify_local_standard_file(path, manifest):
+    """Hash local bytes; this alone does not prove what either engine read."""
+    expected = manifest.get('standard_sha256')
+    if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise ValueError('Invalid standard SHA-256')
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    if digest.hexdigest() != expected:
+        raise ValueError('Local standard file SHA-256 mismatch')
+    return {'local_standard_sha256': expected, 'engine_input_verified': False}
 
 
 def count_groups(records, batch_id, engine, scope):
@@ -71,6 +90,31 @@ def reconcile_counts(mapreduce, spark, batch_id, standard_count):
         groups[scope] = len(left)
     return {'batch_id': batch_id, 'count_reconciliation': 'passed', 'group_counts': groups,
             'ready_for_import': False, 'reason': 'Other required metrics, source data, run provenance and database state still need independent validation'}
+
+
+def check_required_count_groups(standard_rows, mapreduce, spark, batch_id):
+    """Check required count groups against validated standard rows, not just each other."""
+    mapreduce, spark = list(mapreduce), list(spark)
+    expected = {scope: {} for scope in SCOPES}
+    for row in standard_rows:
+        if row.get('batch_id') != batch_id:
+            raise ValueError('Mixed standard batch')
+        for scope, fields in SCOPES.items():
+            dims = {'scope': scope}
+            for field in fields - {'scope'}:
+                value = row[field]
+                dims[field] = (value or None) if field in ('province_key', 'city_key', 'grade_level') else value
+            key = dimension_key(dims)
+            expected[scope][key] = expected[scope].get(key, 0) + 1
+    if not expected['all']:
+        raise ValueError('Expected nonempty validated standard rows')
+    for engine, records, scopes in (('mapreduce', mapreduce, ('city', 'grade')),
+                                    ('spark_sql', spark, tuple(SCOPES))):
+        for scope in scopes:
+            if count_groups(records, batch_id, engine, scope) != expected[scope]:
+                raise ValueError(engine + ' ' + scope + ' groups disagree with standard rows')
+    return {'batch_id': batch_id, 'required_count_groups': 'passed',
+            'ready_for_import': False}
 
 
 def check_data_quality(standard_rows, spark_records, batch_id):
@@ -134,7 +178,7 @@ def comparable_prices(standard_rows, batch_id, currency, policy_id):
 def price_group(standard_rows, batch_id, currency, policy_id, group):
     group = {'scope': 'all'} if group is None else group
     scope = group.get('scope') if isinstance(group, dict) else None
-    expected = {'scope'} if scope == 'all' else SCOPES.get(scope)
+    expected = SCOPES.get(scope) if scope in ('all', 'city', 'grade') else None
     if expected is None or set(group) != expected:
         raise ValueError('Invalid price grouping dimensions')
     dimension_key(group)

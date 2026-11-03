@@ -20,6 +20,8 @@ B应使用同一批次与配置运行项目MapReduce和Spark SQL，保留实际�
 
 A的 `database/statistics_check.py` 已提供两项初步检查：核对两个运行记录的批次、引擎、契约版本和输入SHA-256；对城市及等级计数做逐组和总数对账。其返回值明确标示并非完整运行审计，也不能授权导入或切换ready。其他必需统计、价格口径、来源和数据库状态仍须另行验证。
 
+`check_required_count_groups(standard_rows, mapreduce, spark, batch_id)` 从已验证标准行重新计算 MapReduce 的城市/等级及 Spark 的总体/省份/城市/等级/城市等级数量，检查每组完整性和数量。它不检查类型、价格、作业真实性或数据库。`verify_local_standard_file(path, manifest)` 检查本地文件字节摘要，不证明引擎实际读取了该文件。
+
 `check_data_quality(standard_rows, spark_records, batch_id)` 可将 Spark 的单条 `data_quality` 与已预检的标准数据逐项对照；标准行的 `type_codes` 须先解析为数组。调用方仍须独立验证文件摘要、运行出处及其他指标；该检查不会导入数据或发布批次。
 
 `check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id, group=None)` 可对单个已核准政策的总体、城市或等级价格汇总进行只读对账；默认总体，城市及等级通过 `group` 传入契约维度。调用前须完成标准数据、来源证据及政策批准的独立验证；一次仅核对指定分组，不代表所有分组已齐全或统计可导入。

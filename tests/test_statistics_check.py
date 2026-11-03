@@ -1,6 +1,9 @@
 import copy
+import hashlib
+import tempfile
 import unittest
-from database.statistics_check import check_data_quality, check_overall_price_histogram, check_overall_price_summary, check_pending_price_policy, dimension_key, reconcile_counts, validate_run_identity
+from pathlib import Path
+from database.statistics_check import check_data_quality, check_overall_price_histogram, check_overall_price_summary, check_pending_price_policy, check_required_count_groups, dimension_key, reconcile_counts, validate_run_identity, verify_local_standard_file
 
 
 def sample(engine):
@@ -14,6 +17,9 @@ class StatisticsCheckTests(unittest.TestCase):
         left = dict(batch_id='test', engine='mapreduce', contract_version='1.0', input_sha256='a'*64)
         right = dict(batch_id='test', engine='spark_sql', contract_version='1.0', input_sha256='a'*64)
         self.assertFalse(validate_run_identity(manifest, left, right)['full_run_audit'])
+        with self.assertRaises(ValueError):
+            validate_run_identity(dict(batch_id='test', standard_sha256='a'*64),
+                                  dict(left, contract_version=None), dict(right, contract_version=None))
         for field, value in (('input_sha256', 'b'*64), ('batch_id','other'), ('engine','mapreduce'), ('contract_version','2.0')):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 validate_run_identity(manifest, left, dict(right, **{field:value}))
@@ -152,3 +158,33 @@ class StatisticsCheckTests(unittest.TestCase):
                                       ([dict(record, status='no_data')], []), ([record], ['approved'])):
                 with self.subTest(metric=metric, records=records, policies=policies), self.assertRaises(ValueError):
                     check_pending_price_policy(records, 'test', metric, policies)
+
+    def test_required_groups_compare_to_standard_not_only_to_other_engine(self):
+        rows = [dict(batch_id='test', country_code='CN', province_key='CN:p', city_key='',
+                     grade_system='UNKNOWN', grade_status='unknown', grade_level='')]
+        grade = dict(country_code='CN', grade_system='UNKNOWN', grade_status='unknown', grade_level=None)
+        dims = [dict(scope='all'), dict(scope='province', country_code='CN', province_key='CN:p'),
+                dict(scope='city', country_code='CN', city_key=None), dict(scope='grade', **grade),
+                dict(scope='city_grade', city_key=None, **grade)]
+        def records(engine, groups):
+            return [dict(batch_id='test', engine=engine, metric='attraction_count', dimensions=group,
+                         status='ok', value={'count':1}) for group in groups]
+        mr = records('mapreduce', dims[2:4])
+        spark = records('spark_sql', dims)
+        self.assertFalse(check_required_count_groups(rows, iter(mr), iter(spark), 'test')['ready_for_import'])
+        wrong_mr, wrong_spark = copy.deepcopy(mr), copy.deepcopy(spark)
+        wrong_mr[0]['dimensions']['city_key'] = 'CN:wrong'
+        wrong_spark[2]['dimensions']['city_key'] = 'CN:wrong'
+        for left, right in ((wrong_mr, wrong_spark), (mr, spark[:-1]), (mr, spark + [spark[0]])):
+            with self.subTest(left=left, right=right), self.assertRaises(ValueError):
+                check_required_count_groups(rows, left, right, 'test')
+
+    def test_local_file_hash_checks_bytes_not_engine_execution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'standard.csv'
+            path.write_bytes(b'correct')
+            manifest = {'standard_sha256': hashlib.sha256(b'correct').hexdigest()}
+            self.assertFalse(verify_local_standard_file(path, manifest)['engine_input_verified'])
+            path.write_bytes(b'changed')
+            with self.assertRaises(ValueError):
+                verify_local_standard_file(path, manifest)
