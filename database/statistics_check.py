@@ -131,13 +131,30 @@ def comparable_prices(standard_rows, batch_id, currency, policy_id):
     return candidate_count, prices
 
 
-def check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id):
-    """Check one overall summary; callers verify the policy and input provenance."""
-    candidate_count, prices = comparable_prices(standard_rows, batch_id, currency, policy_id)
-    dims = {'scope': 'all', 'currency': currency, 'price_policy_id': policy_id}
+def price_group(standard_rows, batch_id, currency, policy_id, group):
+    group = {'scope': 'all'} if group is None else group
+    scope = group.get('scope') if isinstance(group, dict) else None
+    expected = {'scope'} if scope == 'all' else SCOPES.get(scope)
+    if expected is None or set(group) != expected:
+        raise ValueError('Invalid price grouping dimensions')
+    dimension_key(group)
+    rows = []
+    for row in standard_rows:
+        if row.get('batch_id') != batch_id:
+            raise ValueError('Mixed standard batch')
+        if all((row[key] or None if key in ('city_key', 'grade_level') else row[key]) == value
+               for key, value in group.items() if key != 'scope'):
+            rows.append(row)
+    return rows, dict(group, currency=currency, price_policy_id=policy_id)
+
+
+def check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id, group=None):
+    """Check a price summary; callers verify policy, evidence and provenance."""
+    rows, dims = price_group(standard_rows, batch_id, currency, policy_id, group)
+    candidate_count, prices = comparable_prices(rows, batch_id, currency, policy_id)
     matches = [r for r in spark_records if r.get('metric') == 'price_summary' and r.get('dimensions') == dims]
     if len(matches) != 1:
-        raise ValueError('Expected exactly one overall price summary')
+        raise ValueError('Expected exactly one price summary for the selected group')
     record = matches[0]
     valid_count = len(prices)
     coverage = (format((Decimal(valid_count) / Decimal(candidate_count)).quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP), '.6f')
@@ -156,13 +173,13 @@ def check_overall_price_summary(standard_rows, spark_records, batch_id, currency
     return {'batch_id': batch_id, 'price_summary_reconciliation': 'passed', 'ready_for_import': False}
 
 
-def check_overall_price_histogram(standard_rows, spark_records, batch_id, currency, policy_id):
-    """Check one overall histogram against validated rows and B's chosen bins."""
-    _, prices = comparable_prices(standard_rows, batch_id, currency, policy_id)
-    dims = {'scope': 'all', 'currency': currency, 'price_policy_id': policy_id}
+def check_overall_price_histogram(standard_rows, spark_records, batch_id, currency, policy_id, group=None):
+    """Check a price histogram against validated rows and B's chosen bins."""
+    rows, dims = price_group(standard_rows, batch_id, currency, policy_id, group)
+    _, prices = comparable_prices(rows, batch_id, currency, policy_id)
     matches = [r for r in spark_records if r.get('metric') == 'price_histogram' and r.get('dimensions') == dims]
     if len(matches) != 1:
-        raise ValueError('Expected exactly one overall price histogram')
+        raise ValueError('Expected exactly one price histogram for the selected group')
     record = matches[0]
     value = record.get('value')
     if (record.get('batch_id') != batch_id or record.get('engine') != 'spark_sql'
@@ -195,3 +212,16 @@ def check_overall_price_histogram(standard_rows, spark_records, batch_id, curren
     if total != len(prices):
         raise ValueError('Histogram does not cover all comparable prices')
     return {'batch_id': batch_id, 'price_histogram_reconciliation': 'passed', 'ready_for_import': False}
+
+
+def check_pending_price_policy(spark_records, batch_id, metric, approved_policies):
+    """Check one pending marker only after independently auditing policy approval."""
+    if approved_policies != [] or metric not in ('price_summary', 'price_histogram'):
+        raise ValueError('Pending requires an independently verified empty policy list')
+    dims = {'scope': 'all', 'currency': None, 'price_policy_id': None}
+    matches = [r for r in spark_records if r.get('metric') == metric and r.get('dimensions') == dims]
+    if (len(matches) != 1 or matches[0].get('batch_id') != batch_id
+            or matches[0].get('engine') != 'spark_sql' or matches[0].get('status') != 'pending_policy'
+            or 'value' not in matches[0] or matches[0]['value'] is not None):
+        raise ValueError('Invalid pending policy record')
+    return {'batch_id': batch_id, 'pending_policy_check': 'passed', 'ready_for_import': False}

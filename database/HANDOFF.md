@@ -22,9 +22,9 @@ A的 `database/statistics_check.py` 已提供两项初步检查：核对两个�
 
 `check_data_quality(standard_rows, spark_records, batch_id)` 可将 Spark 的单条 `data_quality` 与已预检的标准数据逐项对照；标准行的 `type_codes` 须先解析为数组。调用方仍须独立验证文件摘要、运行出处及其他指标；该检查不会导入数据或发布批次。
 
-`check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id)` 可对单个已核准政策的总体价格汇总进行只读对账，调用前须完成标准数据、来源证据及政策批准的独立验证。该函数不检查地区/等级汇总、直方图或未确定政策情形，也不代表统计可导入。
+`check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id, group=None)` 可对单个已核准政策的总体、城市或等级价格汇总进行只读对账；默认总体，城市及等级通过 `group` 传入契约维度。调用前须完成标准数据、来源证据及政策批准的独立验证；一次仅核对指定分组，不代表所有分组已齐全或统计可导入。
 
-`check_overall_price_histogram(standard_rows, spark_records, batch_id, currency, policy_id)` 对单个已核准政策的总体价格直方图进行只读对账，验证 B 选择的分箱边界和逐箱数量；同样须独立验证来源、政策及输入。地区/等级分组和未定政策仍未覆盖。
+`check_overall_price_histogram(standard_rows, spark_records, batch_id, currency, policy_id, group=None)` 对指定总体、城市或等级分组的价格直方图进行只读对账，验证 B 选择的分箱边界和逐箱数量；同样须独立验证来源、政策及输入。`check_pending_price_policy(spark_records, batch_id, metric, approved_policies)` 检查一条总体政策待定记录；调用前须独立核实无已批准政策并传入空列表。不能用空字典或未经审核的政策清单替代批准核实。
 
 ## 查询接入
 

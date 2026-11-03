@@ -1,6 +1,6 @@
 import copy
 import unittest
-from database.statistics_check import check_data_quality, check_overall_price_histogram, check_overall_price_summary, dimension_key, reconcile_counts, validate_run_identity
+from database.statistics_check import check_data_quality, check_overall_price_histogram, check_overall_price_summary, check_pending_price_policy, dimension_key, reconcile_counts, validate_run_identity
 
 
 def sample(engine):
@@ -117,3 +117,38 @@ class StatisticsCheckTests(unittest.TestCase):
         check_overall_price_histogram([row], [record], 'test', 'CNY', 'policy')
         with self.assertRaises(ValueError):
             check_overall_price_histogram([row], [dict(record, status='ok')], 'test', 'CNY', 'policy')
+
+    def test_city_and_grade_price_groups_include_unknown_and_isolate_countries(self):
+        base = dict(batch_id='test', price_form='exact', price_min='10.00', price_max='10.00',
+                    currency='CNY', price_policy_id='policy', grade_system='UNKNOWN',
+                    grade_status='unknown', grade_level='')
+        rows = [dict(base, country_code='CN', city_key=''),
+                dict(base, country_code='CN', city_key='CN:one', price_form='unknown', price_policy_id=None),
+                dict(base, country_code='US', city_key='')]
+        city = dict(scope='city', country_code='CN', city_key=None)
+        grade = dict(scope='grade', country_code='CN', grade_system='UNKNOWN', grade_status='unknown', grade_level=None)
+        dims = dict(city, currency='CNY', price_policy_id='policy')
+        summary = dict(batch_id='test', engine='spark_sql', metric='price_summary', dimensions=dims, status='ok',
+                       value=dict(candidate_count=1, valid_count=1, coverage='1.000000', min='10.00', max='10.00', mean='10.00'))
+        histogram = dict(batch_id='test', engine='spark_sql', metric='price_histogram', dimensions=dims, status='ok',
+                         value=dict(valid_count=1, bins=[dict(lower='0.00', upper=None, count=1)]))
+        check_overall_price_summary(rows, [summary], 'test', 'CNY', 'policy', city)
+        check_overall_price_histogram(rows, [histogram], 'test', 'CNY', 'policy', city)
+        grade_summary = dict(summary, dimensions=dict(grade, currency='CNY', price_policy_id='policy'),
+                             value=dict(candidate_count=2, valid_count=1, coverage='0.500000', min='10.00', max='10.00', mean='10.00'))
+        check_overall_price_summary(rows, [grade_summary], 'test', 'CNY', 'policy', grade)
+        with self.assertRaises(ValueError):
+            check_overall_price_summary(rows, [summary], 'test', 'CNY', 'policy', {'scope':'city', 'city_key':None})
+        with self.assertRaises(ValueError):
+            check_overall_price_summary(rows + [dict(rows[0], batch_id='other')], [summary], 'test', 'CNY', 'policy', city)
+
+    def test_pending_policy_requires_verified_empty_policy_list(self):
+        dims = dict(scope='all', currency=None, price_policy_id=None)
+        for metric in ('price_summary', 'price_histogram'):
+            record = dict(batch_id='test', engine='spark_sql', metric=metric, dimensions=dims,
+                          status='pending_policy', value=None)
+            self.assertFalse(check_pending_price_policy([record], 'test', metric, [])['ready_for_import'])
+            for records, policies in (([record, record], []), ([dict(record, value={})], []),
+                                      ([dict(record, status='no_data')], []), ([record], ['approved'])):
+                with self.subTest(metric=metric, records=records, policies=policies), self.assertRaises(ValueError):
+                    check_pending_price_policy(records, 'test', metric, policies)
