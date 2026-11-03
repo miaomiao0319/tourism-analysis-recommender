@@ -1,6 +1,6 @@
 import copy
 import unittest
-from database.statistics_check import check_data_quality, check_overall_price_summary, dimension_key, reconcile_counts, validate_run_identity
+from database.statistics_check import check_data_quality, check_overall_price_histogram, check_overall_price_summary, dimension_key, reconcile_counts, validate_run_identity
 
 
 def sample(engine):
@@ -83,3 +83,37 @@ class StatisticsCheckTests(unittest.TestCase):
         check_overall_price_summary([row], [record], 'test', 'CNY', 'policy')
         with self.assertRaises(ValueError):
             check_overall_price_summary([row], [dict(record, status='ok')], 'test', 'CNY', 'policy')
+
+    def test_histogram_boundaries_and_coverage(self):
+        base = dict(batch_id='test', currency='CNY', price_policy_id='policy')
+        rows = [dict(base, price_form='free', price_min='0.00', price_max='0.00'),
+                dict(base, price_form='exact', price_min='10.00', price_max='10.00'),
+                dict(base, price_form='from', price_min='5.00', price_max=None)]
+        bins = [dict(lower='0.00', upper='10.00', count=1),
+                dict(lower='10.00', upper=None, count=1)]
+        record = dict(batch_id='test', engine='spark_sql', metric='price_histogram',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='ok', value=dict(valid_count=2, bins=bins))
+        self.assertFalse(check_overall_price_histogram(rows, [record], 'test', 'CNY', 'policy')['ready_for_import'])
+        bad_bins = [
+            [dict(bins[0], count=2), bins[1]],
+            [bins[0], dict(bins[1], lower='11.00')],
+            [bins[0], dict(bins[1], upper='10.00')],
+            [bins[0]],
+            [dict(bins[0], lower='0')],
+            [dict(bins[0], count=True), bins[1]],
+        ]
+        for items in bad_bins:
+            with self.subTest(bins=items), self.assertRaises(ValueError):
+                check_overall_price_histogram(rows, [dict(record, value=dict(valid_count=2, bins=items))], 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_histogram(rows, [record, record], 'test', 'CNY', 'policy')
+
+    def test_histogram_without_comparable_prices(self):
+        row = dict(batch_id='test', price_form='unknown', currency=None, price_policy_id=None)
+        record = dict(batch_id='test', engine='spark_sql', metric='price_histogram',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='no_data', value=dict(valid_count=0, bins=[]))
+        check_overall_price_histogram([row], [record], 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_histogram([row], [dict(record, status='ok')], 'test', 'CNY', 'policy')

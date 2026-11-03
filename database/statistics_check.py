@@ -4,6 +4,7 @@ This is one necessary check, not a complete statistics validation or importer.
 """
 import hashlib
 import json
+import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
@@ -104,8 +105,7 @@ def check_data_quality(standard_rows, spark_records, batch_id):
             'ready_for_import': False}
 
 
-def check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id):
-    """Check one overall summary; callers verify the policy and input provenance."""
+def comparable_prices(standard_rows, batch_id, currency, policy_id):
     if not isinstance(currency, str) or not currency or not isinstance(policy_id, str) or not policy_id:
         raise ValueError('A verified currency and policy are required')
     candidate_count = 0
@@ -128,6 +128,12 @@ def check_overall_price_summary(standard_rows, spark_records, batch_id, currency
                 or (row['price_form'] == 'exact' and amount <= 0)):
             raise ValueError('Invalid comparable amount')
         prices.append(amount)
+    return candidate_count, prices
+
+
+def check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id):
+    """Check one overall summary; callers verify the policy and input provenance."""
+    candidate_count, prices = comparable_prices(standard_rows, batch_id, currency, policy_id)
     dims = {'scope': 'all', 'currency': currency, 'price_policy_id': policy_id}
     matches = [r for r in spark_records if r.get('metric') == 'price_summary' and r.get('dimensions') == dims]
     if len(matches) != 1:
@@ -148,3 +154,44 @@ def check_overall_price_summary(standard_rows, spark_records, batch_id, currency
             or type(value['valid_count']) is not int or value != expected):
         raise ValueError('Price summary disagrees with standard rows')
     return {'batch_id': batch_id, 'price_summary_reconciliation': 'passed', 'ready_for_import': False}
+
+
+def check_overall_price_histogram(standard_rows, spark_records, batch_id, currency, policy_id):
+    """Check one overall histogram against validated rows and B's chosen bins."""
+    _, prices = comparable_prices(standard_rows, batch_id, currency, policy_id)
+    dims = {'scope': 'all', 'currency': currency, 'price_policy_id': policy_id}
+    matches = [r for r in spark_records if r.get('metric') == 'price_histogram' and r.get('dimensions') == dims]
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one overall price histogram')
+    record = matches[0]
+    value = record.get('value')
+    if (record.get('batch_id') != batch_id or record.get('engine') != 'spark_sql'
+            or record.get('status') != ('ok' if prices else 'no_data')
+            or not isinstance(value, dict) or set(value) != {'valid_count', 'bins'}
+            or type(value['valid_count']) is not int or value['valid_count'] != len(prices)
+            or not isinstance(value['bins'], list) or bool(value['bins']) != bool(prices)):
+        raise ValueError('Invalid price histogram')
+    previous = Decimal('0.00')
+    total = 0
+    for index, item in enumerate(value['bins']):
+        if (not isinstance(item, dict) or set(item) != {'lower', 'upper', 'count'}
+                or type(item['count']) is not int or item['count'] < 0):
+            raise ValueError('Invalid histogram bin')
+        lower, upper = item['lower'], item['upper']
+        if not isinstance(lower, str) or not re.fullmatch(r'\d+\.\d{2}', lower):
+            raise ValueError('Invalid histogram lower bound')
+        if upper is not None and (not isinstance(upper, str) or not re.fullmatch(r'\d+\.\d{2}', upper)):
+            raise ValueError('Invalid histogram upper bound')
+        low = Decimal(lower)
+        high = Decimal(upper) if upper is not None else None
+        if (previous is None or low != previous or (high is not None and high <= low)
+                or (high is None and index != len(value['bins']) - 1)):
+            raise ValueError('Histogram bins must be continuous and increasing from zero')
+        actual = sum(low <= price and (high is None or price < high) for price in prices)
+        if item['count'] != actual:
+            raise ValueError('Histogram bin count disagrees with standard rows')
+        total += actual
+        previous = high
+    if total != len(prices):
+        raise ValueError('Histogram does not cover all comparable prices')
+    return {'batch_id': batch_id, 'price_histogram_reconciliation': 'passed', 'ready_for_import': False}
