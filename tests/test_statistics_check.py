@@ -1,6 +1,6 @@
 import copy
 import unittest
-from database.statistics_check import check_data_quality, dimension_key, reconcile_counts, validate_run_identity
+from database.statistics_check import check_data_quality, check_overall_price_summary, dimension_key, reconcile_counts, validate_run_identity
 
 
 def sample(engine):
@@ -52,3 +52,34 @@ class StatisticsCheckTests(unittest.TestCase):
                 check_data_quality(rows, records, 'test')
         with self.assertRaises(ValueError):
             check_data_quality([dict(rows[0], type_codes='[]')], [record], 'test')
+
+    def test_overall_price_summary_checks_eligibility_and_rounding(self):
+        base = dict(batch_id='test', currency='CNY', price_policy_id='policy')
+        rows = [dict(base, price_form='free', price_min='0.00', price_max='0.00'),
+                dict(base, price_form='exact', price_min='0.01', price_max='0.01'),
+                dict(base, price_form='from', price_min='1.00', price_max=None)]
+        value = dict(candidate_count=3, valid_count=2, coverage='0.666667',
+                     min='0.00', max='0.01', mean='0.01')
+        record = dict(batch_id='test', engine='spark_sql', metric='price_summary',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='ok', value=value)
+        self.assertFalse(check_overall_price_summary(rows, [record], 'test', 'CNY', 'policy')['ready_for_import'])
+        variants = [[record, record], [dict(record, value=dict(value, valid_count=3))],
+                    [dict(record, value=dict(value, mean='0.00'))],
+                    [dict(record, value=dict(value, candidate_count=True))],
+                    [dict(record, engine='mapreduce')]]
+        for records in variants:
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                check_overall_price_summary(rows, records, 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_summary([dict(rows[1], price_max='0.02')], [record], 'test', 'CNY', 'policy')
+
+    def test_overall_price_summary_without_valid_prices(self):
+        row = dict(batch_id='test', currency='CNY', price_policy_id=None, price_form='unknown')
+        record = dict(batch_id='test', engine='spark_sql', metric='price_summary',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='no_data', value=dict(candidate_count=1, valid_count=0, coverage='0.000000',
+                                                   min=None, max=None, mean=None))
+        check_overall_price_summary([row], [record], 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_summary([row], [dict(record, status='ok')], 'test', 'CNY', 'policy')

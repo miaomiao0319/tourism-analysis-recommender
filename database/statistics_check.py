@@ -4,6 +4,7 @@ This is one necessary check, not a complete statistics validation or importer.
 """
 import hashlib
 import json
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
 SCOPES = {
@@ -101,3 +102,49 @@ def check_data_quality(standard_rows, spark_records, batch_id):
         raise ValueError('Data quality counts disagree with standard rows')
     return {'batch_id': batch_id, 'data_quality_reconciliation': 'passed',
             'ready_for_import': False}
+
+
+def check_overall_price_summary(standard_rows, spark_records, batch_id, currency, policy_id):
+    """Check one overall summary; callers verify the policy and input provenance."""
+    if not isinstance(currency, str) or not currency or not isinstance(policy_id, str) or not policy_id:
+        raise ValueError('A verified currency and policy are required')
+    candidate_count = 0
+    prices = []
+    for row in standard_rows:
+        if row.get('batch_id') != batch_id:
+            raise ValueError('Mixed standard batch')
+        candidate_count += 1
+        if (row.get('price_policy_id') != policy_id or row.get('currency') != currency
+                or row.get('price_form') not in ('free', 'exact')):
+            continue
+        try:
+            amount = Decimal(row['price_min'])
+            upper = Decimal(row['price_max'])
+        except (KeyError, TypeError, InvalidOperation):
+            raise ValueError('Invalid comparable amount') from None
+        if (not amount.is_finite() or not upper.is_finite() or amount != upper
+                or amount < 0 or amount.as_tuple().exponent < -2
+                or (row['price_form'] == 'free' and amount != 0)
+                or (row['price_form'] == 'exact' and amount <= 0)):
+            raise ValueError('Invalid comparable amount')
+        prices.append(amount)
+    dims = {'scope': 'all', 'currency': currency, 'price_policy_id': policy_id}
+    matches = [r for r in spark_records if r.get('metric') == 'price_summary' and r.get('dimensions') == dims]
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one overall price summary')
+    record = matches[0]
+    valid_count = len(prices)
+    coverage = (format((Decimal(valid_count) / Decimal(candidate_count)).quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP), '.6f')
+                if candidate_count else None)
+    def money(value):
+        return format(value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), '.2f')
+    expected = {'candidate_count': candidate_count, 'valid_count': valid_count, 'coverage': coverage,
+                'min': money(min(prices)) if prices else None, 'max': money(max(prices)) if prices else None,
+                'mean': money(sum(prices) / valid_count) if prices else None}
+    value = record.get('value')
+    if (record.get('batch_id') != batch_id or record.get('engine') != 'spark_sql'
+            or record.get('status') != ('ok' if prices else 'no_data') or not isinstance(value, dict)
+            or set(value) != set(expected) or type(value['candidate_count']) is not int
+            or type(value['valid_count']) is not int or value != expected):
+        raise ValueError('Price summary disagrees with standard rows')
+    return {'batch_id': batch_id, 'price_summary_reconciliation': 'passed', 'ready_for_import': False}
