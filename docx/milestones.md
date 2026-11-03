@@ -111,9 +111,9 @@ B 的纯函数与 C 的页面/接口准备不依赖全量数据完成。共同�
 
 | ID | 负责 agent | 任务与完成依据 | 前置依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| M2-A01 | A | 交付 Hadoop/HDFS/YARN 配置、初始化保护及启停入口；实际验证 DataNode、NodeManager 和独立文件读写，不只展示进程。 | M1-A03 | todo |
-| M2-A02 | A | 实现 MySQL 四表、幂等导入、批次状态与查询模块；用契约样本检查键、引用、金额、筛选、分页和候选读取，不要求 C 重写 SQL。 | M1-A02, M1-A03 | todo |
-| M2-A03 | A | 上传 M1-A02 的真实标准批次，核对 CSV/字典摘要并整批发布，记录可用 HDFS 输入；不能仅上传构造样本就宣称真实入湖。 | M2-A01, M1-A02 | todo |
+| M2-A01 | A | 交付 Hadoop/HDFS/YARN 配置、初始化保护及启停入口；实际验证 DataNode、NodeManager 和独立文件读写，不只展示进程。 | M1-A03 | in_progress |
+| M2-A02 | A | 实现 MySQL 四表、幂等导入、批次状态与查询模块；用契约样本检查键、引用、金额、筛选、分页和候选读取，不要求 C 重写 SQL。 | M1-A02, M1-A03 | in_progress |
+| M2-A03 | A | 上传 M1-A02 的真实标准批次，核对 CSV/字典摘要并整批发布，记录可用 HDFS 输入；不能仅上传构造样本就宣称真实入湖。 | M2-A01, M1-A02 | in_progress |
 | M2-B01 | B | 用项目 Streaming mapper/reducer 在 YARN 完成真实批次城市与等级计数；保留 application_id、路径、状态、输出与数量证据。 | M2-A03 | todo |
 | M2-B02 | B | Spark SQL 实际读取同批 HDFS 数据，产出规定统计与质量记录；价格政策未定时如实 pending_policy，并验证金额类型及已支持分支。 | M2-A03 | todo |
 | M2-B03 | B；A 配合核对输入 | 对两引擎城市/等级分组逐项核对，含未知/冲突分组；交付契约格式统计及 run.json，不累加或伪造另一引擎结果。 | M2-B01, M2-B02 | todo |
@@ -287,8 +287,62 @@ M3-A02 的可用性不设未获批准的覆盖率门槛，但必须真实支持�
 
 ### A 季节票价扩充与最高限价分离（2026-11-02）
 
+后续交付顺序（用户2026-11-02明确提出）：采用迭代交付，先将已有标准数据入库并验证，再逐批补充全国数据的完整性。当前候选已覆盖31省级地区，不将其表述为全国景点已采全。仍沿用不可变批次及同批统计发布要求，不原地混改已发布快照；数据先导入不代表统计尚缺的批次已ready。本次只读检查发现本机WSL2的Ubuntu-22.04处于Stopped状态，未发现Ubuntu24.04；Windows未找到mysql命令，服务查询受权限限制，尚不能判断WSL内MySQL状态。下一步优先核实数据库运行条件、实现四表与导入验证，票价及范围补充不作为首次入库的前置条件。未在本轮创建数据库或宣称导入成功。
+
+数据库准备：应用户要求新增 database/schema.sql 草案，按契约定义四张表、批次关联、大小写敏感标识及金额类型；未执行MySQL语法或实际建库验证，不代表导入程序完成。只读启动WSL Ubuntu-22.04检查MySQL命令未返回结果，等待后主动中断；仍不知道其MySQL状态。开工git fetch因127.0.0.1代理连接失败，本地保留改动并继续独立准备，未确认最新远端。下一步计划：核实统一环境和MySQL 8.4，完成导入前引用、金额及幂等检查，再在真实实例验证；批次只有统计等依赖齐备才能标为ready。
+
+数据库继续准备：新增 database/preflight.py 和 import_batch.py 草案；前者只读验证 atlas_clean_20261102_02 的8431景点、9338来源观察、9来源、42输入摘要和2条价格资格，实际文件校验通过。导入草案使用事务、UTC、Decimal及本地环境变量凭据，只写loading；遇到已有批次拒绝覆盖，因为完整内容幂等比对尚未实现。30项测试通过，包含批次路径和UTC测试；未进行真实MySQL建表、导入、幂等、回滚或查询验证。WSL清单仅有Ubuntu22.04及docker-desktop，项目Ubuntu24.04尚未找到；MySQL8.4状态未核实。开工fetch仍因本机127.0.0.1代理连接失败；源码及进度尚未提交。下一步计划：准备符合基线的Ubuntu/MySQL环境，完善重复导入的完整内容比对，再用真实实例验证导入和回滚，随后接入同批统计。
+
+后续进展：导入草案已实现已有批次的完整元数据、景点各字段与来源观察逐项比对；一致时只返回已有状态，差异时报错并保留原记录。31项本地测试通过，包括构造重复记录及同数量内容被修改的拒绝检查；仍未在真实MySQL中验证幂等、事务或建表。尝试执行 wsl --install -d Ubuntu-24.04 --no-launch，等待期间未收到输出或完成结果，已中断；不宣称安装成功，实际安装状态需重新核实。开工fetch仍因本机代理连接失败；本轮代码和本进度账保留本地、未推送。下一步计划：核实Ubuntu安装状态、排查WSL启动及网络，再在MySQL 8.4真实实例验证建表、首次导入、重复导入与失败回滚。
+
+WSL及数据库核查：WSL发行版清单仍只有Ubuntu-22.04和docker-desktop；wsl --list --online可列出Ubuntu-24.04。尝试官方 --web-download --no-launch 安装后持续无输出，等待后中断，再次核对清单未见Ubuntu-24.04；未确认具体下载失败原因。127.0.0.1:3306连接未成功，Windows未发现mysql命令，不能据此断定其他实例均不存在。导入程序增加事务提交前逐字段读回景点及来源的校验，31项本地测试通过；尚未进行MySQL实际执行。Git fetch仍因127.0.0.1代理连接失败。下一步计划：排查WSL安装命令无输出的原因，完成Ubuntu24.04与MySQL8.4配置，然后在真实实例验证建表、首次导入、幂等与回滚；当前工作区保留未提交改动。
+
+数据库实际入库（2026-11-02）：在有终端进度的系统环境中完成Ubuntu-24.04安装，实际Ubuntu 24.04.5；WSL报告NAT网络回退及本机代理未镜像，实际Ubuntu官方源与MySQL源均可访问。MySQL官方APT配置包0.8.40-1的MD5与官方下载页一致，安装MySQL Community Server 8.4.13并核实服务active及本地管理员连接。未覆盖既有数据库；新建tourism_recommender并实际执行schema.sql，核对四张表均存在。
+
+创建本地auth_socket导入账户tourism_import@localhost，映射Ubuntu root，仅有项目库SELECT/INSERT/UPDATE权限；程序支持DB_UNIX_SOCKET，不记录密码。使用Ubuntu系统Python 3.12.3、PyMySQL 1.0.2开展试运行，并非Python 3.11统一锁定环境验收。atlas_clean_20261102_02实际导入成功，事务提交前逐字段读回通过；相同批次再次执行，完整内容比对通过且未重复写入。独立SQL查询得到8431景点、31省级地区、278城市空值、2条可比价格、9338来源观察；analysis_results为0，批次保持loading，尚未发布ready。31项本地测试通过；真实失败回滚、MySQL备份恢复、查询模块、统一依赖及同批大数据统计仍未验证。代码与进度未提交，Git远端仍需待代理连接可用后同步。下一步计划：验证失败回滚和备份恢复，建立统一Python3.11环境，再推进HDFS和同批MapReduce/Spark统计。
+
+备份恢复检查（2026-11-02）：mysqldump --single-transaction生成本地 .runtime/mysql-backups/tourism_20261102_01.sql（14868338字节，SHA-256 a4b76146436a87994833196d84c06c81cb8b067ce67feddb761227057e749b53），恢复到新建独立数据库tourism_restore_check_20261102_01；四张表的MySQL CHECKSUM TABLE与原库一致。恢复库事务中先修改状态再触发重复主键错误，断开后状态恢复loading；原库8431景点仍在。这验证数据库事务回滚，不等于导入程序异常路径已验证；验证库保留，未删除。尝试以root管道运行远程uv安装脚本被自动审批拒绝，原因是未固定、未校验远程脚本导致供应链和系统持久化风险；该脚本未执行。需改用固定版本、核验并以普通用户安装的安全方案；Python3.11统一环境、导入异常路径、HDFS仍待完成。git fetch仍因127.0.0.1代理不可达；源码及本进度账未提交。下一步计划：完成安全的uv/Python安装准备，再验证导入异常路径与HDFS环境。
+
+环境准备复核：WSL的Ubuntu命令和发行版列表查询均长时间未返回，相关本次查询已发出中断；未执行WSL shutdown，因它会停止全部发行版及Docker，需要用户确认没有重要任务。固定版本uv 0.13.6官方PyPI元数据可通过网页工具访问，但未在Ubuntu下载、校验或安装；普通Linux用户亦未创建。Windows侧复核备份SHA-256仍为a4b76146436a87994833196d84c06c81cb8b067ce67feddb761227057e749b53，批次文件预检仍通过8431条及42项摘要；这不是本轮数据库连接结果。git fetch依然因本机代理连接失败。下一步计划：用户确认可重启后恢复WSL，再以普通用户核验固定uv包、建立Python3.11并测试数据库导入异常回滚。
+
+Python与导入回滚验证（2026-11-03）：用户明确同意重启WSL，shutdown成功；Ubuntu24.04和MySQL恢复，原批次仍loading、8431条景点。建立普通用户tourismdev，从官方PyPI下载uv 0.13.6 wheel并校验SHA-256 22759b8895e1103578de6fb4cd27e94b4399d021023378d29f01333717751fba，仅提取固定uv二进制安装到该用户目录；使用uv安装Python3.11.18，生成.py文件版本标记、pyproject.toml及uv.lock。项目根目录.venv解释器为3.11.18，31项标准库测试通过；uv sync在Windows挂载目录安装包时报Operation not permitted，显式copy模式同样失败，尚不能记统一项目环境完成。临时使用Linux用户目录的独立验证环境按锁安装A组依赖成功，Scrapy 2.19.0、Pandas 2.3.3等导入成功，31项测试通过；该临时环境不替代约定的项目.venv交付。
+
+在独立新库tourism_rollback_check_20261103_01中，真实import_batch程序写入来源后注入异常；独立SQL验证批次、来源、景点均为0，原库仍8431条，验证导入程序异常回滚。测试库保留未删除；仅验证这一具体失败点。Git fetch仍因代理连接失败；Python锁定与数据库代码均为本地未提交工作。下一步计划：解决Windows挂载目录.venv安装问题并完成统一环境验证，检查Hadoop/HDFS依赖和启动方案，继续后续数据处理。
+
+环境诊断（2026-11-03）：git fetch仍因本机127.0.0.1代理不可达；工作区保留未提交变更。WSL普通用户启动权限探测长时间无响应，依据用户此前授权执行wsl --shutdown成功，重新启动Ubuntu后的探测仍长时间无输出；未确认具体权限操作失败原因，未删除现有环境或数据。宿主机可见16逻辑处理器、C盘约185GiB可用；CIM内存查询受权限限制。Hadoop/JDK/HDFS实际状态尚未读取，也未安装、初始化或上传，不能标记M2完成。下一步计划：恢复WSL后查明Windows挂载环境依赖安装错误，再核对Java11、Hadoop3.4.3和安全初始化前提。
+
+环境诊断后续（2026-11-03）：上次WSL探测随后返回，在原/mnt/c挂载下普通用户fchmod和fchown均报EPERM。临时在单次WSL会话中将同一C盘以metadata、uid/gid=1000挂载到独立入口，普通用户两项操作通过；基于同一项目锁文件重新安装data/dev组，修复旧半安装的包登记后，原项目.venv的Python3.11.18、Scrapy2.19.0、Pandas2.3.3、PyMySQL1.2.3导入成功，uv pip check报告51包兼容，31项测试通过。此次mount非持久配置，跨会话的同步入口尚未实现；B/C各组环境也未验证，M1-A03不标done。
+
+安装并验证Ubuntu官方包openjdk-11-jdk-headless 11.0.32.1+1-1ubuntu1~24.04，java和javac均为11.0.32.1。WSL可见内存13Gi、可用约12Gi。以普通用户从Apache归档站下载Hadoop3.4.3，速度慢时保留部分文件并自清华Apache镜像续传；完整491MiB压缩包用Apache官方下载站SHA-512 e25be7e57b4d3c5bfe83895844321a21d6cf7331266d524d8983c27cf484e576c3d79b3b60d590f8cddecf16229d0e232de2491b1b61b362ee7d67072c7290e1校验通过，在用户目录解压后hadoop version返回3.4.3。仅为程序版本验证；未生成配置、format NameNode、启动HDFS/YARN或上传真实数据。Git fetch因代理连接失败，工作区变更未提交。下一步计划：实现可复现的数据依赖同步方式和带已有数据保护的Hadoop服务入口，验证DataNode/NodeManager并上传同批数据。
+
 - 新批次atlas_clean_20261102_02沿用获准政策，8431候选、31省级地区、278城市空值；新增朝阳凤凰山60.00 CNY旺季基础票，可比价2条、未知8429条。朝阳市发改委2025-12-10通知有效至2027-12-31，旺季4月1日至10月31日覆盖目标全月，观光车另计10元。政府景区介绍确认辽宁朝阳市东部所在地，匹配已有朝阳凤凰山；未将价格复制给辽宁丹东或其他省份同名山。
 - 两条互补观察补入既有实体：raw_count=8893，excluded_count=455，accepted_source_count=8438，merged_extra_count=7，standard_count=8431。仅该实体价格、补充位置引用及采集时间改变，其余记录除batch_id外不变。旧批次固定，未增加景点行数。
 - 真实网页工具响应保存于data/raw/admission_followup_20261102_01/web-responses.json，行政定价及所在地仅用于有限事实核验，不声称整站CC授权或本机原始HTML爬虫通过。云蒙70元来源及蒙阴/临沂所在地已发现，待独立子景区登记；天上王城80元、雪山彩虹谷80元、沂蒙山根据地50元明确属于最高限价，未作为实际exact报价填入。天然地下画廊及文峰塔全文读取失败，仅有搜索线索，不计入成功采集。
 - 新增cleaning/admission_followup.py及季节票证据测试；28项测试通过，真实快照回读与数量、来源、输入/输出摘要检查通过。凤凰山59.99元不满足、60元满足；淡季30元不拿来代表10月价格。程序只完成本地资格判定，未接入MySQL/HDFS/推荐服务。审计见同批metadata内followup-validation.json。
 - 本轮fetch再次因127.0.0.1代理无法连接失败，不能确认最新远端；继续已知基线内本地工作，不重试此前被自动审查拒绝的推送。下一步计划：落实云蒙独立实体，继续跨地区寻找实际报价并补所在地与范围；最高限价另寻实际售票证明，不把发现数冒充可比覆盖。M1-A02/M3-A02仍未整体完成。
+
+### 依赖同步入口与Hadoop准备（2026-11-03）
+
+- 新增scripts/sync-data-wsl.sh，root仅负责独立临时挂载，以现有普通用户执行uv sync --locked data/dev并卸载；真实运行检查51项依赖通过，sh -n语法检查通过，拒绝root安装的动态检查未取得结果。
+- 显式设置JAVA_HOME时hdfs version返回3.4.3，当前项目.runtime/hadoop不存在；尚未实现Hadoop服务入口，未初始化、启动或上传。Git fetch仍因代理连接失败，本地工作未提交。
+- 下一步计划：实现并验证带路径、端口及既有数据保护的Hadoop入口和批次上传，完成实际服务及文件读回验证。
+
+HDFS上传准备（2026-11-03）：新增scripts/upload-hdfs.py，复用本地批次预检、建立独立暂存目录、读回SHA-256、同批已有目录核验及协作上传锁；Python语法检查通过，非法批次标识拒绝。程序尚未在HDFS中执行，也未验证多个非协作写入者的并发行为。Hadoop服务配置、保留已有数据的初始化/启停入口、DataNode与NodeManager检查尚未实现，未format或上传。Git fetch仍因代理连接失败，改动未提交。下一步计划：完成服务入口及独立文件写入读回验证，再运行真实批次上传和幂等检查。
+
+初始化保护准备：新增scripts/hadoop_guard.py，只读检查已有运行目录、路径越界、Java/Hadoop版本及指定端口，不创建目录或format。Windows运行33项测试，32通过、符号链接测试因系统权限跳过；真实WSL环境检查命令等待启动、未取得结果。Hadoop init/start/status/stop入口仍未实现，也未启动HDFS/YARN或上传数据。Git远端fetch仍因代理失败，源码与进度保留本地。下一步计划：完成服务入口并在可用的WSL中验证保护及服务，不以只读检查替代初始化或联调。
+
+HDFS首次真实运行（2026-11-03）：新增scripts/hadoop.sh与hadoop.py，首次init前只读检查项目.runtime/hadoop为空、JAVA11/Hadoop3.4.3及指定端口；init完成并生成NameNode元数据，之后不得再次format。启动第一次返回但进程因SIGHUP退出、YARN缺少队列配置及NodeManager监听错误，保留日志；补齐发行版配置、调整守护启动和本地监听后继续使用原元数据。DataNode路径中中文编码产生UnknownFormatConversionException，修正DataNode路径表示后单独重启；status实际验证一个live DataNode、运行中NodeManager、独立文件写入读回并删除。环境使用临时metadata挂载，入口目前仍需通过本地.runtime/hadoop_mount.py组织，start对已经运行的守护进程可能报错，stop、重启恢复及多次init保护尚未完成真实验证；未宣称M2-A01整体done。
+
+通过scripts/upload-hdfs.py将atlas_clean_20261102_02真实批次CSV、manifest和字典上传至/tourism/batches/atlas_clean_20261102_02，暂存及发布后逐文件读回SHA-256通过；第二次运行返回already_present_verified，未覆盖原数据。Python3.11运行33项测试全部通过。MySQL批次仍loading，尚无MapReduce/Spark SQL统计及网页集成；HDFS上传属于局部进展，M2闭环未完成。脚本、数据和进度为本地未提交工作；Git fetch仍因代理连接失败。下一步计划：验证服务幂等启停和重启恢复、完善可复现入口并向B交接HDFS批次，之后进行MapReduce/Spark同批统计。
+
+HDFS服务恢复与交接准备（2026-11-03）：改进已运行进程PID及类名核对，重复start识别五个守护进程并安全返回；实际stop一次再start，status检查DataNode、NodeManager及独立文件写入读回通过。重启后上传入口对既有批次返回already_present_verified，CSV、manifest和字典读回摘要一致；对已有运行目录执行init正确拒绝，未重新format。新增scripts/hadoop-wsl.sh作为普通用户服务入口，实际status通过；本地交接说明在.runtime/hdfs-handoff.md，尚未向B发送消息。33项Python3.11测试通过。尚未验证重复stop、整机/WSL重启恢复、端口冲突完整保护、批次非协作写入者并发、MapReduce/Spark实际作业或网页集成；M2-A01/A03仅in_progress，M1统一环境及M2整体未完成。Git fetch受代理连接失败，改动未提交。下一步计划：完善入口未验证边界及真实批次交接，由B实现同批MapReduce/Spark作业并对账。
+
+查询初版（2026-11-03）：新增backend/app/repositories/attractions.py的AttractionRepository，提供批次信息、景点列表/详情、已存统计及推荐候选读取；连接由调用者提供，查询先校验指定批次为ready，使用参数化条件和排序白名单。名称搜索的%/_为字面字符；预算使用Decimal、已登记币种政策及free/exact；候选迭代不按展示页数截断。建立仅限本机普通用户tourismdev使用、对项目库仅SELECT的tourism_reader，实际连接和授权已核对，不向代码或日志写密码。
+
+Python3.11共36项单元测试通过。独立MySQL库tourism_query_check_20261103_03写入27条标记为test的构造记录，验证分页总数/越界、名称特殊字符、69.99/70预算边界、详情证据、完整27条候选、统计存在/筛选为空/未产出；同一验证确认真实atlas_clean_20261102_02仍loading且被查询入口拒绝。测试库保留；不将构造结果冒充真实统计。此为初版，尚未完成C的AppError映射、Flask接入、全部字典/异常边界及真实ready批次查询验证；仍缺B同批MapReduce/Spark结果，未发布ready或通知他人。HDFS交接说明仍在本地.runtime/hdfs-handoff.md。M2-A02更新为in_progress，整体M2未完成。Git fetch因本机代理不可用，代码及进度未提交。下一步计划：完善契约边界和跨模块错误映射，交接HDFS给B产出同批统计及对账，再验证真实ready批次查询。
+
+查询边界复核（2026-11-03）：提取通用输入及地区/等级字典校验；列表、统计和候选统一拒绝不存在国家、跨省城市及冲突等级组合，基本字段格式在访问数据库前检查。Python3.11下38项测试通过；对已有独立构造测试库只读复核，27条候选未截断，列表、统计和候选均将不存在的US标识为INVALID_FILTER，真实批次未修改。C负责的backend/app/errors.py尚不存在；当前查询模块仍通过ValueError表达受控状态，数据库异常到公共AppError/HTTP的映射和跨模块接口验证尚未完成，不能宣称错误适配已接入。Git fetch仍因代理连接失败；代码与进度保留本地。下一步计划：与C现有错误适配对接后完善异常映射，继续B侧同批统计交付及真实ready查询验证。
+
+查询错误适配准备（2026-11-03）：复核backend/app/errors.py和B的analysis/data/results产物均不存在；未接管C/B实现，也未伪造统计。新增A目录下可注入AppError类型和数据库异常类型的RepositoryAdapter，覆盖查询及候选迭代中途异常；已知受控码和连接失败可转换，未知编程异常继续抛出。Python3.11下41项测试通过；隔离构造MySQL库查询只读复核通过，实际连接不存在端口的OperationalError映射为DEPENDENCY_UNAVAILABLE且消息不暴露端点。C公共AppError与Flask尚不存在，适配器仅构造替身验证，不能声称已完成跨模块错误接入；本地交接见.runtime/repository-handoff.md，未向B/C发消息。真实批次继续loading；Git fetch仍因代理连接失败，工作未提交。下一步计划：C公共错误模块及B同批统计可用后进行实际接入和对账，继续验证真实ready批次查询。
+
+交接及远端复核：本轮在系统网络环境只读git fetch成功，origin/main仍为b178923，HEAD已包含该主线；未发现B/C远端任务分支，工作区仍无C公共错误模块及B统计。只读查询真实MySQL仍为loading、8431景点、0统计；HDFS/YARN的DataNode、NodeManager与独立文件读回通过，Python3.11的41项测试再次通过。新增database/HANDOFF.md记录可复现入口、HDFS输入和A/B/C对接限制，不含凭据或第三方原始数据；尚未向B/C发送消息。工作区代码和进度仍未提交，先前自动审批拒绝的推送未重试；B统计及C错误模块到位前不能宣称ready或跨模块接入。下一步计划：完成A可独立验证的批次统计导入/发布准备，待B/C产物可用后同批对账并实际联调。
