@@ -20,6 +20,8 @@ B应使用同一批次与配置运行项目MapReduce和Spark SQL，保留实际�
 
 A的 `database/statistics_check.py` 已提供两项初步检查：核对两个运行记录的批次、引擎、契约版本和输入SHA-256；对城市及等级计数做逐组和总数对账。其返回值明确标示并非完整运行审计，也不能授权导入或切换ready。其他必需统计、价格口径、来源和数据库状态仍须另行验证。
 
+`check_data_quality(standard_rows, spark_records, batch_id)` 可将 Spark 的单条 `data_quality` 与已预检的标准数据逐项对照；标准行的 `type_codes` 须先解析为数组。调用方仍须独立验证文件摘要、运行出处及其他指标；该检查不会导入数据或发布批次。
+
 ## 查询接入
 
 `backend.app.repositories.attractions.AttractionRepository`接收无参数据库连接工厂，提供批次、列表、详情、统计和完整推荐候选读取。调用者负责提供只读连接与UTC会话。只有明确指定的ready批次可读，当前真实批次仍是loading。

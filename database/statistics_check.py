@@ -69,3 +69,35 @@ def reconcile_counts(mapreduce, spark, batch_id, standard_count):
         groups[scope] = len(left)
     return {'batch_id': batch_id, 'count_reconciliation': 'passed', 'group_counts': groups,
             'ready_for_import': False, 'reason': 'Other required metrics, source data, run provenance and database state still need independent validation'}
+
+
+def check_data_quality(standard_rows, spark_records, batch_id):
+    """Compare Spark quality totals with validated rows; verify provenance separately."""
+    fields = ('standard_count', 'missing_city_count', 'unknown_grade_count',
+              'conflicting_grade_count', 'missing_type_count', 'unknown_price_count',
+              'conflicting_price_count')
+    expected = dict.fromkeys(fields, 0)
+    for row in standard_rows:
+        if row.get('batch_id') != batch_id or not isinstance(row.get('type_codes'), list):
+            raise ValueError('Invalid standard row batch or type_codes')
+        expected['standard_count'] += 1
+        expected['missing_city_count'] += row['city_key'] in ('', None)
+        expected['unknown_grade_count'] += row['grade_status'] == 'unknown'
+        expected['conflicting_grade_count'] += row['grade_status'] == 'conflict'
+        expected['missing_type_count'] += not row['type_codes']
+        expected['unknown_price_count'] += row['price_form'] == 'unknown'
+        expected['conflicting_price_count'] += row['price_form'] == 'conflict'
+    quality = [row for row in spark_records if row.get('metric') == 'data_quality']
+    if len(quality) != 1:
+        raise ValueError('Expected exactly one data quality record')
+    row = quality[0]
+    value = row.get('value')
+    if (row.get('batch_id') != batch_id or row.get('engine') != 'spark_sql'
+            or row.get('dimensions') != {'scope': 'all'} or row.get('status') != 'ok'
+            or not isinstance(value, dict) or set(value) != set(fields)
+            or any(type(value[field]) is not int or value[field] < 0 for field in fields)):
+        raise ValueError('Invalid data quality record')
+    if value != expected:
+        raise ValueError('Data quality counts disagree with standard rows')
+    return {'batch_id': batch_id, 'data_quality_reconciliation': 'passed',
+            'ready_for_import': False}

@@ -1,6 +1,6 @@
 import copy
 import unittest
-from database.statistics_check import dimension_key, reconcile_counts, validate_run_identity
+from database.statistics_check import check_data_quality, dimension_key, reconcile_counts, validate_run_identity
 
 
 def sample(engine):
@@ -34,3 +34,21 @@ class StatisticsCheckTests(unittest.TestCase):
         self.assertEqual(dimension_key({'a':'中','b':None}), dimension_key({'b':None,'a':'中'}))
         with self.assertRaises(ValueError):
             dimension_key({'a':1})
+
+    def test_quality_reconciles_overlapping_missing_fields(self):
+        rows = [dict(batch_id='test', city_key='', grade_status='unknown', type_codes=[], price_form='unknown'),
+                dict(batch_id='test', city_key='CN:1', grade_status='conflict', type_codes=['park'], price_form='conflict')]
+        value = dict(standard_count=2, missing_city_count=1, unknown_grade_count=1,
+                     conflicting_grade_count=1, missing_type_count=1, unknown_price_count=1,
+                     conflicting_price_count=1)
+        record = dict(batch_id='test', engine='spark_sql', metric='data_quality',
+                      dimensions={'scope': 'all'}, status='ok', value=value)
+        self.assertFalse(check_data_quality(rows, [record], 'test')['ready_for_import'])
+        variants = [[], [record, record], [dict(record, value=dict(value, missing_city_count=0))],
+                    [dict(record, value=dict(value, standard_count=True))],
+                    [dict(record, dimensions={'scope': 'city'})], [dict(record, engine='mapreduce')]]
+        for records in variants:
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                check_data_quality(rows, records, 'test')
+        with self.assertRaises(ValueError):
+            check_data_quality([dict(rows[0], type_codes='[]')], [record], 'test')
