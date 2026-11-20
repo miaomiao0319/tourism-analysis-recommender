@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from database.import_statistics import import_records
+from database.import_statistics import check_run_details, import_records
 
 
 class Cursor:
@@ -53,6 +53,18 @@ class Connection:
 
 
 class ImportStatisticsTests(unittest.TestCase):
+    def test_run_metadata_requires_timestamps_and_matching_command(self):
+        run = {'started_at': '2026-11-20T01:00:00Z', 'finished_at': '2026-11-20T01:01:00Z',
+               'yarn_application_id': 'application_123_0001',
+               'execution': ['hadoop', '-D', 'mapreduce.framework.name=yarn',
+                             '-input', 'hdfs://input', '-output', 'hdfs://output']}
+        check_run_details(run, 'mapreduce', 'batch', 'hdfs://input', 'hdfs://output')
+        for changed in (dict(run, started_at=None), dict(run, finished_at='2026-11-19T00:00:00Z'),
+                        dict(run, yarn_application_id='incorrect'),
+                        dict(run, execution=run['execution'][:-1] + ['hdfs://other'])):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                check_run_details(changed, 'mapreduce', 'batch', 'hdfs://input', 'hdfs://output')
+
     @patch('database.import_statistics.equal_evidence', return_value=True)
     @patch('database.import_statistics.equal_attractions', return_value=True)
     @patch('database.import_statistics.json_lines', return_value=[])

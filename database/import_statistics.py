@@ -2,8 +2,10 @@
 import csv
 import json
 import os
+import re
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 from analysis.common import canonical_json, hdfs_cat, parse_jsonl, source_context, valid_id
@@ -16,6 +18,31 @@ from database.statistics_check import (
     check_overall_price_summary, check_pending_price_policy, check_required_count_groups,
     dimension_key, reconcile_counts, validate_run_identity,
 )
+
+
+def check_run_details(run, engine, batch_id, input_uri, output_uri):
+    command = run.get('execution')
+    if not isinstance(command, list) or not command or any(not isinstance(x, str) or not x for x in command):
+        raise ValueError('Missing run command')
+    try:
+        start = datetime.fromisoformat(run['started_at'].replace('Z', '+00:00'))
+        end = datetime.fromisoformat(run['finished_at'].replace('Z', '+00:00'))
+        if start.utcoffset() is None or end.utcoffset() is None or end < start:
+            raise ValueError('Invalid run timestamps')
+    except (KeyError, TypeError, AttributeError):
+        raise ValueError('Missing or invalid run timestamps') from None
+    if engine == 'mapreduce':
+        app = run.get('yarn_application_id')
+        if not isinstance(app, str) or not re.fullmatch(r'application_[0-9]+_[0-9]+', app):
+            raise ValueError('Invalid YARN application ID')
+        required = (('-input', input_uri), ('-output', output_uri))
+        if 'mapreduce.framework.name=yarn' not in command:
+            raise ValueError('MapReduce command does not use YARN')
+    else:
+        required = (('--batch-id', batch_id), ('--input-uri', input_uri), ('--output-uri', output_uri))
+    pairs = list(zip(command, command[1:]))
+    if any(pairs.count(pair) != 1 or command.count(pair[0]) != 1 for pair in required):
+        raise ValueError('Run command does not match input or output')
 
 
 def validate_statistics(batch_id, results_root):
@@ -45,8 +72,7 @@ def validate_statistics(batch_id, results_root):
                 or run.get('raw_output_uri') != output
                 or run.get('standard_count') != len(rows)):
             raise ValueError('Run metadata does not match verified input or output')
-        if engine == 'mapreduce' and not run.get('yarn_application_id'):
-            raise ValueError('Missing YARN application ID')
+        check_run_details(run, engine, batch_id, context['paths']['input'], output)
         selected = parse_jsonl((folder / 'statistics.jsonl').read_text(encoding='utf-8'), batch_id, engine)
         raw = hdfs_cat(hdfs, output + '/part-*').decode('utf-8')
         actual = convert_output(raw, batch_id) if engine == 'mapreduce' else parse_jsonl(raw, batch_id, engine)

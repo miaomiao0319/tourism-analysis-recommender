@@ -32,7 +32,7 @@ A的 `database/statistics_check.py` 已提供两项初步检查：核对两个�
 
 统计导入入口为 `python -m database.import_statistics <batch_id> <results_root>`，其中 results_root 包含批次目录和 mapreduce、spark_sql 子目录。先提供 Hadoop 与 HDFS 配置及 DB_IMPORT_USER、DB_IMPORT_PASSWORD，连接参数沿用景点导入。程序校验本地批次、HDFS 输入和两引擎原始输出，独立对账数量、类型、质量及全部价格分组，再锁定数据库批次并事务式写入统计。已有统计相同则幂等返回，不同则拒绝覆盖；入口保持批次原状态，不自动发布 ready。运行记录和 HDFS 当前内容相符不能单独证明历史运行时输入未变化。
 
-`backend.app.repositories.attractions.AttractionRepository`接收无参数据库连接工厂，提供批次、列表、详情、统计和完整推荐候选读取。调用者负责提供只读连接与UTC会话。只有明确指定的ready批次可读，当前真实批次仍是loading。
+`backend.app.repositories.attractions.AttractionRepository`接收无参数据库连接工厂，提供批次、列表、详情、统计和完整推荐候选读取。调用者负责提供只读连接与UTC会话。只有明确指定的ready批次可读；本机真实批次 `atlas_clean_20261102_02` 已在2026-11-20导入统计并核验后置为ready。
 
 `backend.app.repositories.error_adapter.RepositoryAdapter`可接收C实现的`AppError`类及数据库连接异常类型。C负责公共错误类型和HTTP映射；当前适配器仅用替身及独立测试库验证，尚未与Flask或C的模块联调。候选迭代器应完整消费或显式关闭；SQL中途失败应终止整次推荐。
 
@@ -41,5 +41,5 @@ A的 `database/statistics_check.py` 已提供两项初步检查：核对两个�
 ## 当前交付限制
 
 - Python 3.11数据依赖、查询及保护测试已在本机运行；其他角色依赖组尚待相应角色验证。
-- 尚无已导入的真实Spark/MapReduce统计或已发布ready批次；数据库查询、分析、网页尚未完成端到端联调。
+- 本机真实批次已导入两引擎共2276条统计；只读账户已验证查询、统计及推荐模块接入。HTTP接口和网页尚待C交付并联调。
 - 同步远端和公开数据必须按项目Git及来源使用边界处理。
