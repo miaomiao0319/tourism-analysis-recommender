@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from hadoop_guard import check
+from hadoop_guard import check, datanode_uri
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / '.runtime' / 'hadoop'
@@ -76,7 +76,7 @@ def run(action):
             (RUNTIME / name).mkdir()
         config_file(CONF / 'core-site.xml', {'fs.defaultFS': 'hdfs://localhost:9000', 'hadoop.tmp.dir': RUNTIME / 'tmp'})
         config_file(CONF / 'hdfs-site.xml', {'dfs.replication': '1', 'dfs.namenode.name.dir': (RUNTIME / 'name').as_uri(),
-            'dfs.datanode.data.dir': 'file://' + str(RUNTIME / 'data'), 'dfs.namenode.http-address': '127.0.0.1:9870'})
+            'dfs.datanode.data.dir': datanode_uri(RUNTIME / 'data'), 'dfs.namenode.http-address': '127.0.0.1:9870'})
         config_file(CONF / 'mapred-site.xml', {'mapreduce.framework.name': 'yarn',
             'mapreduce.application.classpath': '$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/*:$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/lib/*'})
         config_file(CONF / 'yarn-site.xml', {'yarn.nodemanager.aux-services': 'mapreduce_shuffle',
@@ -95,10 +95,16 @@ def run(action):
             ensure_support_files(home)
             hdfs_config = CONF / 'hdfs-site.xml'
             hdfs_tree = ET.parse(hdfs_config)
-            for prop in hdfs_tree.getroot().findall('property'):
-                if prop.findtext('name') == 'dfs.datanode.data.dir' and prop.findtext('value') == (RUNTIME / 'data').as_uri():
-                    prop.find('value').text = 'file://' + str(RUNTIME / 'data')
-                    hdfs_tree.write(hdfs_config, encoding='utf-8', xml_declaration=True)
+            properties = [prop for prop in hdfs_tree.getroot().findall('property')
+                          if prop.findtext('name') == 'dfs.datanode.data.dir']
+            if (len(properties) != 1 or properties[0].find('value') is None
+                    or properties[0].findtext('value') is None):
+                raise ValueError('Expected one DataNode directory configuration')
+            value = properties[0].find('value')
+            corrected = datanode_uri(RUNTIME / 'data', value.text)
+            if value.text != corrected:
+                value.text = corrected
+                hdfs_tree.write(hdfs_config, encoding='utf-8', xml_declaration=True)
             path = CONF / 'yarn-site.xml'
             tree = ET.parse(path)
             if not any(p.findtext('name') == 'yarn.nodemanager.webapp.address' for p in tree.getroot().findall('property')):
