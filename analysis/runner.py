@@ -27,7 +27,7 @@ JAVA_11_RE = re.compile(r'(?:openjdk|java) version "11(?:[.\"])')
 def require_file(path: Path) -> Path:
     if not path.is_file():
         raise FileNotFoundError(str(path))
-    return path.resolve()
+    return path.absolute()
 
 
 def hdfs_exists(binary: str, path: str) -> bool:

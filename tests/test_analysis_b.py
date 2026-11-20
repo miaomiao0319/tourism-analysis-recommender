@@ -5,8 +5,10 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 from analysis.common import (COLUMNS, canonical_json, count_dimensions, output_files,
@@ -14,7 +16,7 @@ from analysis.common import (COLUMNS, canonical_json, count_dimensions, output_f
 from analysis.mapreduce.mapper import transform_line
 from analysis.mapreduce.reducer import aggregate
 from analysis.mapreduce.converter import convert_output
-from analysis.runner import require_runtime_versions, verified_stat_rows
+from analysis.runner import require_file, require_runtime_versions, verified_stat_rows
 from analysis.spark.job import decimal_2, histogram, price_coverage
 
 
@@ -39,6 +41,17 @@ def csv_blob(rows):
 
 
 class AnalysisContractTests(unittest.TestCase):
+    def test_virtualenv_executable_path_keeps_symlink(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'python-real'
+            target.write_text('test')
+            link = Path(folder) / 'python'
+            try:
+                link.symlink_to(target)
+            except OSError:
+                self.skipTest('Symlinks unavailable')
+            self.assertEqual(require_file(link), link.absolute())
+
     def test_csv_preflight_handles_quoted_comma_and_json(self):
         validate_csv_bytes(csv_blob([sample()]), 'test_1', 1)
 
