@@ -167,6 +167,7 @@ sort 默认 key_asc，按数据契约的 dimension_key 升序；attraction_count
 | `country_code`、`province_key`、`city_key` | 可选字符串或 null，缺省为 null；遵循同一地区一致性规则。 |
 | `type_codes` | 可选字符串数组，缺省为 []，最多 10 项；按字典检查，去重排序后使用。 |
 | `budget` | 缺省或 null 表示不施加预算条件；有值时为只含 amount、currency、price_policy_id 的对象，三项均必填。 |
+| `mode` | 可选，默认 `balanced`；可选 `balanced`、`interest`、`economy`、`quality`。模式只调整排序权重，不替代地区、兴趣或预算条件。 |
 | `limit` | 整数，默认 10，范围 1—50。 |
 
 至少有一项明确的地区、非空兴趣或预算偏好；全部为空返回 400 / EMPTY_PREFERENCES。类型列表使用“至少匹配一项”的语义；地区与预算等不同条件之间同时满足，不在无结果时静默放宽。
@@ -177,12 +178,13 @@ budget.amount 是单个景点门票预算上限。无可用政策时返回 409 /
 
 | 字段 | 含义 |
 | --- | --- |
-| `items` | 按实际推荐规则排序的数组；每项仅含 attraction、reasons，前者为完整 Attraction，后者为非空说明字符串数组。 |
+| `items` | 按实际推荐规则排序的数组；每项含 attraction、reasons、topsis_score、topsis_rank。attraction 为完整 Attraction，reasons 为非空说明字符串数组；topsis_score 为当前候选集的相对接近度，topsis_rank 为多样性调整前的排名。 |
 | `candidate_count` | 评估完整候选范围、满足所有硬条件后、截取 limit 之前的数量。 |
 | `returned_count`、`limit` | 分别等于 items 长度和规范化后的请求 limit。items 长度应为 min(candidate_count, limit)。 |
 | `rule_version` | B 实际实现的规则版本标识；不能把文档示例值当作生产默认值。 |
-| `preferences` | 规范化后的 country_code、province_key、city_key、type_codes、budget；未选条件为 null 或 []，金额为两位字符串。 |
+| `preferences` | 规范化后的 country_code、province_key、city_key、type_codes、budget、mode；未选条件为 null 或 []，金额为两位字符串。 |
 | `empty_reason` | 有结果时 null；没有满足条件的候选时为 NO_MATCHING_CANDIDATES。 |
+| `algorithm_info` | 包含 mode、mode_label、ahp_weights、ahp_cr、available_weights、effective_weights、mmr_lambda、warnings 和 score_note，解释本次排序与缺失条件。分数不是满意概率或游客评分。 |
 
 无匹配是 200、items=[]、candidate_count=0，不是算法异常。算法未实现或未接入时返回 RECOMMENDER_UNAVAILABLE，不能随机填结果或以空列表假装推荐成功。
 
@@ -237,7 +239,9 @@ budget.amount 是单个景点门票预算上限。无可用政策时返回 409 /
           },
           "collected_at": "2026-10-19T08:00:00Z"
         },
-        "reasons": ["符合所选城市", "匹配所选测试类型", "已确认免费，符合 0.00 CNY 门票预算"]
+        "reasons": ["符合所选城市", "匹配所选测试类型", "已确认免费，符合 0.00 CNY 门票预算"],
+        "topsis_score": 1.0,
+        "topsis_rank": 1
       }
     ],
     "candidate_count": 1,
@@ -249,9 +253,11 @@ budget.amount 是单个景点门票预算上限。无可用政策时返回 409 /
       "province_key": null,
       "city_key": "cn:bj:bj",
       "type_codes": ["test_nature"],
-      "budget": {"amount": "0.00", "currency": "CNY", "price_policy_id": "test_policy"}
+      "budget": {"amount": "0.00", "currency": "CNY", "price_policy_id": "test_policy"},
+      "mode": "balanced"
     },
-    "empty_reason": null
+    "empty_reason": null,
+    "algorithm_info": {"mode": "balanced", "mode_label": "均衡推荐", "ahp_weights": {"interest": 0.333333, "grade": 0.333333, "price": 0.333333}, "ahp_cr": 0.0, "available_weights": {"interest": 0.333333, "grade": 0.333333, "price": 0.333333}, "effective_weights": {"interest": 0.333333, "grade": 0.333333, "price": 0.333333}, "mmr_lambda": 0.8, "warnings": [], "score_note": "TOPSIS 分数是本次候选的相对理想解贴近度，不是满意概率或游客评分。"}
   },
   "meta": {"batch_id": "test_api_001", "data_kind": "test", "contract_version": "1.0"},
   "error": null
@@ -269,8 +275,8 @@ budget.amount 是单个景点门票预算上限。无可用政策时返回 409 /
 | `Page` | items、page、page_size、total、total_pages 的分页字典。 |
 | `ListFilters` | q、country_code、province_key、city_key、grade_system、grade_status、grade_level、type_code、max_price、currency、price_policy_id；未选字段为 null。 |
 | `StatisticsQuery` | metric、scope、filters；filters 只含本次实际施加的合法分组字段及价格上下文，不含分页和 sort。 |
-| `Preferences` | 推荐 data.preferences 的五个字段；预算或地区未选时 null，兴趣未选时 []。 |
-| `RecommendationResult` | 第 7 节全部七个返回字段组成的字典，不含 HTTP 顶层封装。 |
+| `Preferences` | 推荐 data.preferences 的六个字段；预算或地区未选时 null，兴趣未选时 []。 |
+| `RecommendationResult` | 第 7 节全部返回字段组成的字典，不含 HTTP 顶层封装。 |
 
 | 负责人 | 函数约定 | 返回与边界 |
 | --- | --- | --- |
