@@ -60,9 +60,12 @@ def check(batch_id, root=ROOT):
         row["source_refs"] = json.loads(row["source_refs"])
         row["type_codes"] = json.loads(row["type_codes"])
     # This source-specific validator supports the two reviewed prices only.
-    if batch_id not in ("atlas_clean_20261102_02", "atlas_clean_20261125_01"):
+    if batch_id not in ("atlas_clean_20261102_02", "atlas_clean_20261125_01", "atlas_clean_20261125_02", "atlas_clean_20261125_03"):
         raise ValueError("A new batch needs its own reviewed price validator")
-    validate(rows, evidence, dictionaries, manifest, expanded_price)
+    price_validator = expanded_price
+    if batch_id in ("atlas_clean_20261125_02", "atlas_clean_20261125_03"):
+        from cleaning.taishan_admission import price_validator
+    validate(rows, evidence, dictionaries, manifest, price_validator)
     if batch_id == "atlas_clean_20261125_01":
         from cleaning.name_type_enrichment import BATCH, PARENT, TYPE, TYPE_DEFINITION, inferred
         check(PARENT, root)
@@ -86,6 +89,59 @@ def check(batch_id, root=ROOT):
                 old['source_refs']['types'] = list(old['source_refs']['name'])
             if old != new:
                 raise ValueError('Snapshot differs from reviewed name rule')
+        if manifest['quality']['missing_type_count'] != sum(not row['type_codes'] for row in rows):
+            raise ValueError('Type quality count mismatch')
+    if batch_id == "atlas_clean_20261125_02":
+        from cleaning.taishan_admission import ATTRACTION, BATCH, HTML_SHA, PARENT, PDF_SHA
+        from cleaning.admission_pilot import POLICY
+        check(PARENT, root)
+        parent_metadata = root / 'data/metadata' / PARENT
+        if (manifest.get('parent_batch_id') != PARENT
+                or dictionaries != json.loads((parent_metadata / 'dictionaries.json').read_text(encoding='utf-8'))
+                or evidence[:-2] != json_lines(parent_metadata / 'evidence.jsonl')
+                or sources[:-2] != json_lines(parent_metadata / 'sources.jsonl')
+                or digest(root / 'data/raw/taishan_20261125_01/ticket.html') != HTML_SHA
+                or digest(root / 'data/raw/taishan_20261125_01/notice.pdf') != PDF_SHA):
+            raise ValueError('Taishan snapshot metadata or audited source differs')
+        with (root / 'data/processed' / PARENT / 'attractions.csv').open(encoding='utf-8', newline='') as stream:
+            previous = list(csv.DictReader(stream))
+        if len(previous) != len(rows):
+            raise ValueError('Unexpected entity count change')
+        for old, new in zip(previous, rows):
+            old['type_codes'] = json.loads(old['type_codes'])
+            old['source_refs'] = json.loads(old['source_refs'])
+            old['batch_id'] = BATCH
+            if old['attraction_id'] == ATTRACTION:
+                old.update(price_form='exact', price_min='115.00', price_max='115.00', currency='CNY',
+                           price_policy_id=POLICY, price_basis='普通全价基础门票；不含交通和索道',
+                           price_raw='泰山门票115元/人，首次检票后三日内有效', collected_at=manifest['created_at'])
+                old['source_refs']['price'] = ['e_taishan_notice', 'e_taishan_ticket']
+            if old != new:
+                raise ValueError('Snapshot differs from reviewed Taishan change')
+        if (manifest['quality']['unknown_price_count'] != sum(r['price_form'] == 'unknown' for r in rows)
+                or manifest['quality']['comparable_price_count'] != sum(bool(r['price_policy_id']) for r in rows)):
+            raise ValueError('Price quality count mismatch')
+    if batch_id == "atlas_clean_20261125_03":
+        from cleaning.additional_name_types import BATCH, PARENT, enrich, update_dictionaries
+        check(PARENT, root)
+        parent_metadata = root / 'data/metadata' / PARENT
+        expected_dictionaries = json.loads((parent_metadata / 'dictionaries.json').read_text(encoding='utf-8'))
+        update_dictionaries(expected_dictionaries)
+        if (manifest.get('parent_batch_id') != PARENT or dictionaries != expected_dictionaries
+                or evidence != json_lines(parent_metadata / 'evidence.jsonl')
+                or sources != json_lines(parent_metadata / 'sources.jsonl')):
+            raise ValueError('Snapshot metadata differs from reviewed parent')
+        with (root / 'data/processed' / PARENT / 'attractions.csv').open(encoding='utf-8', newline='') as stream:
+            previous = list(csv.DictReader(stream))
+        if len(previous) != len(rows):
+            raise ValueError('Unexpected entity count change')
+        for old, new in zip(previous, rows):
+            old['type_codes'] = json.loads(old['type_codes'])
+            old['source_refs'] = json.loads(old['source_refs'])
+            old['batch_id'] = BATCH
+            enrich(old)
+            if old != new:
+                raise ValueError('Snapshot differs from reviewed name rules')
         if manifest['quality']['missing_type_count'] != sum(not row['type_codes'] for row in rows):
             raise ValueError('Type quality count mismatch')
     return dict(batch_id=batch_id, standard_count=len(rows), evidence_count=len(evidence),
