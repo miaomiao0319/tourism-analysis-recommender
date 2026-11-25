@@ -1,6 +1,9 @@
 import copy
+import hashlib
+import tempfile
 import unittest
-from database.statistics_check import dimension_key, reconcile_counts, validate_run_identity
+from pathlib import Path
+from database.statistics_check import check_data_quality, check_overall_price_histogram, check_overall_price_summary, check_pending_price_policy, check_required_count_groups, dimension_key, reconcile_counts, validate_run_identity, verify_local_standard_file
 
 
 def sample(engine):
@@ -14,6 +17,9 @@ class StatisticsCheckTests(unittest.TestCase):
         left = dict(batch_id='test', engine='mapreduce', contract_version='1.0', input_sha256='a'*64)
         right = dict(batch_id='test', engine='spark_sql', contract_version='1.0', input_sha256='a'*64)
         self.assertFalse(validate_run_identity(manifest, left, right)['full_run_audit'])
+        with self.assertRaises(ValueError):
+            validate_run_identity(dict(batch_id='test', standard_sha256='a'*64),
+                                  dict(left, contract_version=None), dict(right, contract_version=None))
         for field, value in (('input_sha256', 'b'*64), ('batch_id','other'), ('engine','mapreduce'), ('contract_version','2.0')):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 validate_run_identity(manifest, left, dict(right, **{field:value}))
@@ -34,3 +40,151 @@ class StatisticsCheckTests(unittest.TestCase):
         self.assertEqual(dimension_key({'a':'中','b':None}), dimension_key({'b':None,'a':'中'}))
         with self.assertRaises(ValueError):
             dimension_key({'a':1})
+
+    def test_quality_reconciles_overlapping_missing_fields(self):
+        rows = [dict(batch_id='test', city_key='', grade_status='unknown', type_codes=[], price_form='unknown'),
+                dict(batch_id='test', city_key='CN:1', grade_status='conflict', type_codes=['park'], price_form='conflict')]
+        value = dict(standard_count=2, missing_city_count=1, unknown_grade_count=1,
+                     conflicting_grade_count=1, missing_type_count=1, unknown_price_count=1,
+                     conflicting_price_count=1)
+        record = dict(batch_id='test', engine='spark_sql', metric='data_quality',
+                      dimensions={'scope': 'all'}, status='ok', value=value)
+        self.assertFalse(check_data_quality(rows, [record], 'test')['ready_for_import'])
+        variants = [[], [record, record], [dict(record, value=dict(value, missing_city_count=0))],
+                    [dict(record, value=dict(value, standard_count=True))],
+                    [dict(record, dimensions={'scope': 'city'})], [dict(record, engine='mapreduce')]]
+        for records in variants:
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                check_data_quality(rows, records, 'test')
+        with self.assertRaises(ValueError):
+            check_data_quality([dict(rows[0], type_codes='[]')], [record], 'test')
+
+    def test_overall_price_summary_checks_eligibility_and_rounding(self):
+        base = dict(batch_id='test', currency='CNY', price_policy_id='policy')
+        rows = [dict(base, price_form='free', price_min='0.00', price_max='0.00'),
+                dict(base, price_form='exact', price_min='0.01', price_max='0.01'),
+                dict(base, price_form='from', price_min='1.00', price_max=None)]
+        value = dict(candidate_count=3, valid_count=2, coverage='0.666667',
+                     min='0.00', max='0.01', mean='0.01')
+        record = dict(batch_id='test', engine='spark_sql', metric='price_summary',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='ok', value=value)
+        self.assertFalse(check_overall_price_summary(rows, [record], 'test', 'CNY', 'policy')['ready_for_import'])
+        variants = [[record, record], [dict(record, value=dict(value, valid_count=3))],
+                    [dict(record, value=dict(value, mean='0.00'))],
+                    [dict(record, value=dict(value, candidate_count=True))],
+                    [dict(record, engine='mapreduce')]]
+        for records in variants:
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                check_overall_price_summary(rows, records, 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_summary([dict(rows[1], price_max='0.02')], [record], 'test', 'CNY', 'policy')
+
+    def test_overall_price_summary_without_valid_prices(self):
+        row = dict(batch_id='test', currency='CNY', price_policy_id=None, price_form='unknown')
+        record = dict(batch_id='test', engine='spark_sql', metric='price_summary',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='no_data', value=dict(candidate_count=1, valid_count=0, coverage='0.000000',
+                                                   min=None, max=None, mean=None))
+        check_overall_price_summary([row], [record], 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_summary([row], [dict(record, status='ok')], 'test', 'CNY', 'policy')
+
+    def test_histogram_boundaries_and_coverage(self):
+        base = dict(batch_id='test', currency='CNY', price_policy_id='policy')
+        rows = [dict(base, price_form='free', price_min='0.00', price_max='0.00'),
+                dict(base, price_form='exact', price_min='10.00', price_max='10.00'),
+                dict(base, price_form='from', price_min='5.00', price_max=None)]
+        bins = [dict(lower='0.00', upper='10.00', count=1),
+                dict(lower='10.00', upper=None, count=1)]
+        record = dict(batch_id='test', engine='spark_sql', metric='price_histogram',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='ok', value=dict(valid_count=2, bins=bins))
+        self.assertFalse(check_overall_price_histogram(rows, [record], 'test', 'CNY', 'policy')['ready_for_import'])
+        bad_bins = [
+            [dict(bins[0], count=2), bins[1]],
+            [bins[0], dict(bins[1], lower='11.00')],
+            [bins[0], dict(bins[1], upper='10.00')],
+            [bins[0]],
+            [dict(bins[0], lower='0')],
+            [dict(bins[0], count=True), bins[1]],
+        ]
+        for items in bad_bins:
+            with self.subTest(bins=items), self.assertRaises(ValueError):
+                check_overall_price_histogram(rows, [dict(record, value=dict(valid_count=2, bins=items))], 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_histogram(rows, [record, record], 'test', 'CNY', 'policy')
+
+    def test_histogram_without_comparable_prices(self):
+        row = dict(batch_id='test', price_form='unknown', currency=None, price_policy_id=None)
+        record = dict(batch_id='test', engine='spark_sql', metric='price_histogram',
+                      dimensions={'scope':'all', 'currency':'CNY', 'price_policy_id':'policy'},
+                      status='no_data', value=dict(valid_count=0, bins=[]))
+        check_overall_price_histogram([row], [record], 'test', 'CNY', 'policy')
+        with self.assertRaises(ValueError):
+            check_overall_price_histogram([row], [dict(record, status='ok')], 'test', 'CNY', 'policy')
+
+    def test_city_and_grade_price_groups_include_unknown_and_isolate_countries(self):
+        base = dict(batch_id='test', price_form='exact', price_min='10.00', price_max='10.00',
+                    currency='CNY', price_policy_id='policy', grade_system='UNKNOWN',
+                    grade_status='unknown', grade_level='')
+        rows = [dict(base, country_code='CN', city_key=''),
+                dict(base, country_code='CN', city_key='CN:one', price_form='unknown', price_policy_id=None),
+                dict(base, country_code='US', city_key='')]
+        city = dict(scope='city', country_code='CN', city_key=None)
+        grade = dict(scope='grade', country_code='CN', grade_system='UNKNOWN', grade_status='unknown', grade_level=None)
+        dims = dict(city, currency='CNY', price_policy_id='policy')
+        summary = dict(batch_id='test', engine='spark_sql', metric='price_summary', dimensions=dims, status='ok',
+                       value=dict(candidate_count=1, valid_count=1, coverage='1.000000', min='10.00', max='10.00', mean='10.00'))
+        histogram = dict(batch_id='test', engine='spark_sql', metric='price_histogram', dimensions=dims, status='ok',
+                         value=dict(valid_count=1, bins=[dict(lower='0.00', upper=None, count=1)]))
+        check_overall_price_summary(rows, [summary], 'test', 'CNY', 'policy', city)
+        check_overall_price_histogram(rows, [histogram], 'test', 'CNY', 'policy', city)
+        grade_summary = dict(summary, dimensions=dict(grade, currency='CNY', price_policy_id='policy'),
+                             value=dict(candidate_count=2, valid_count=1, coverage='0.500000', min='10.00', max='10.00', mean='10.00'))
+        check_overall_price_summary(rows, [grade_summary], 'test', 'CNY', 'policy', grade)
+        with self.assertRaises(ValueError):
+            check_overall_price_summary(rows, [summary], 'test', 'CNY', 'policy', {'scope':'city', 'city_key':None})
+        with self.assertRaises(ValueError):
+            check_overall_price_summary(rows + [dict(rows[0], batch_id='other')], [summary], 'test', 'CNY', 'policy', city)
+
+    def test_pending_policy_requires_verified_empty_policy_list(self):
+        dims = dict(scope='all', currency=None, price_policy_id=None)
+        for metric in ('price_summary', 'price_histogram'):
+            record = dict(batch_id='test', engine='spark_sql', metric=metric, dimensions=dims,
+                          status='pending_policy', value=None)
+            self.assertFalse(check_pending_price_policy([record], 'test', metric, [])['ready_for_import'])
+            for records, policies in (([record, record], []), ([dict(record, value={})], []),
+                                      ([dict(record, status='no_data')], []), ([record], ['approved'])):
+                with self.subTest(metric=metric, records=records, policies=policies), self.assertRaises(ValueError):
+                    check_pending_price_policy(records, 'test', metric, policies)
+
+    def test_required_groups_compare_to_standard_not_only_to_other_engine(self):
+        rows = [dict(batch_id='test', country_code='CN', province_key='CN:p', city_key='',
+                     grade_system='UNKNOWN', grade_status='unknown', grade_level='')]
+        grade = dict(country_code='CN', grade_system='UNKNOWN', grade_status='unknown', grade_level=None)
+        dims = [dict(scope='all'), dict(scope='province', country_code='CN', province_key='CN:p'),
+                dict(scope='city', country_code='CN', city_key=None), dict(scope='grade', **grade),
+                dict(scope='city_grade', city_key=None, **grade)]
+        def records(engine, groups):
+            return [dict(batch_id='test', engine=engine, metric='attraction_count', dimensions=group,
+                         status='ok', value={'count':1}) for group in groups]
+        mr = records('mapreduce', dims[2:4])
+        spark = records('spark_sql', dims)
+        self.assertFalse(check_required_count_groups(rows, iter(mr), iter(spark), 'test')['ready_for_import'])
+        wrong_mr, wrong_spark = copy.deepcopy(mr), copy.deepcopy(spark)
+        wrong_mr[0]['dimensions']['city_key'] = 'CN:wrong'
+        wrong_spark[2]['dimensions']['city_key'] = 'CN:wrong'
+        for left, right in ((wrong_mr, wrong_spark), (mr, spark[:-1]), (mr, spark + [spark[0]])):
+            with self.subTest(left=left, right=right), self.assertRaises(ValueError):
+                check_required_count_groups(rows, left, right, 'test')
+
+    def test_local_file_hash_checks_bytes_not_engine_execution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'standard.csv'
+            path.write_bytes(b'correct')
+            manifest = {'standard_sha256': hashlib.sha256(b'correct').hexdigest()}
+            self.assertFalse(verify_local_standard_file(path, manifest)['engine_input_verified'])
+            path.write_bytes(b'changed')
+            with self.assertRaises(ValueError):
+                verify_local_standard_file(path, manifest)

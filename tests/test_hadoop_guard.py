@@ -1,10 +1,19 @@
 import tempfile
 import unittest
 from pathlib import Path
-from scripts.hadoop_guard import check
+from scripts.hadoop_guard import check, datanode_uri
 
 
 class HadoopGuardTests(unittest.TestCase):
+    def test_datanode_chinese_path_is_not_percent_encoded(self):
+        path = Path.cwd() / '大三上资料' / 'hadoop' / 'data'
+        expected = 'file://' + str(path)
+        self.assertEqual(datanode_uri(path), expected)
+        self.assertEqual(datanode_uri(path, path.as_uri()), expected)
+        self.assertEqual(datanode_uri(path, expected), expected)
+        with self.assertRaises(ValueError):
+            datanode_uri(path, 'file:///elsewhere/data')
+
     def test_existing_runtime_is_never_formatted(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp) / '.runtime' / 'hadoop'

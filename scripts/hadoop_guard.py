@@ -6,6 +6,15 @@ import subprocess
 from pathlib import Path
 
 
+def datanode_uri(path, configured=None):
+    """Keep DataNode's local path unescaped; reject unexpected storage changes."""
+    path = Path(path)
+    expected = 'file://' + str(path)
+    if configured is not None and configured not in (expected, path.as_uri()):
+        raise ValueError('Unexpected DataNode directory; inspect before starting')
+    return expected
+
+
 def check(root, java_home, hadoop_home):
     root = Path(root).resolve(strict=True)
     runtime = root / '.runtime' / 'hadoop'
