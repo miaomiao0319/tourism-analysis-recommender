@@ -45,3 +45,17 @@ A 的交接批次为 `atlas_clean_20261102_02`。在目标机确认批次仍为 
 | 独立演示样本 | `scripts/web_sample.py` |
 
 从根目录运行 `.venv/bin/python -m unittest discover -s tests -p test_web_recommendations.py` 验证接口。需要重新导出独立 HTML 时，先安装前端依赖，再运行 `.venv/bin/python -m scripts.build_web_preview .runtime/Shanhe_Atlas.html`。
+
+## 景点查询与统计展示
+
+本版“景点查询”调用 `GET /api/v1/attractions`，支持名称子串、地区、等级、类型、门票上限、排序和服务端分页。点击记录读取详情与来源。“景点分布”调用 `GET /api/v1/statistics`，逐页取得同批 Spark SQL 分组，展示省级分布、城市数量前十、等级，以及所选票价口径的样本数与分布。无统计、未知地区、无可比价格和真实零值分别展示。地图点击有记录的省份可进入查询页，筛选会带上该省份。
+
+地图使用本地的 Natural Earth Admin 1（1:50m，natural-earth-vector v5.1.2）。`frontend/src/assets/provinces.json` 选取本项目覆盖的 31 个省级地区、保留名称和简化精度的坐标。通过当前批次地区字典的中文省名匹配；无法匹配的分组另列。地图仅表示本数据集的统计覆盖范围。来源与使用条款：[源文件](https://github.com/nvkelso/natural-earth-vector/blob/v5.1.2/geojson/ne_50m_admin_1_states_provinces.geojson)、[公共领域条款](https://www.naturalearthdata.com/about/terms-of-use/)。
+
+六个接口可在 A 运行网站的机器上一键核对。将批次参数替换成 A 当前选定的 ready 批次，执行：
+
+```bash
+.venv/bin/python -m scripts.verify_web --expected-batch atlas_clean_20261102_02
+```
+
+仅在本机演示新页面时可运行 `.venv/bin/python -m scripts.web --demo`。若要用 Gunicorn 验证同源构建和重启，可在测试目录运行 `.venv/bin/gunicorn --workers 1 --bind 127.0.0.1:5000 'scripts.web:create_demo_app()'`，其批次为 test_c_travel_guide。正式部署入口仍为 `backend.app:create_app()`。

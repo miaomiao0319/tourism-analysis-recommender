@@ -12,6 +12,8 @@ async function request(path, options) {
 }
 
 export const client = {
+  list: params => request('/attractions?' + new URLSearchParams(params)),
+  statistics: params => request('/statistics?' + new URLSearchParams(params)),
   dataset: () => request('/dataset'),
   recommend: (payload) => request('/recommendations', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
