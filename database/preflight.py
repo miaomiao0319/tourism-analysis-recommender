@@ -60,9 +60,34 @@ def check(batch_id, root=ROOT):
         row["source_refs"] = json.loads(row["source_refs"])
         row["type_codes"] = json.loads(row["type_codes"])
     # This source-specific validator supports the two reviewed prices only.
-    if batch_id != "atlas_clean_20261102_02":
+    if batch_id not in ("atlas_clean_20261102_02", "atlas_clean_20261125_01"):
         raise ValueError("A new batch needs its own reviewed price validator")
     validate(rows, evidence, dictionaries, manifest, expanded_price)
+    if batch_id == "atlas_clean_20261125_01":
+        from cleaning.name_type_enrichment import BATCH, PARENT, TYPE, TYPE_DEFINITION, inferred
+        check(PARENT, root)
+        parent_metadata = root / 'data/metadata' / PARENT
+        expected_dictionaries = json.loads((parent_metadata / 'dictionaries.json').read_text(encoding='utf-8'))
+        expected_dictionaries['types'].append(TYPE_DEFINITION)
+        if (manifest.get('parent_batch_id') != PARENT or dictionaries != expected_dictionaries
+                or evidence != json_lines(parent_metadata / 'evidence.jsonl')
+                or sources != json_lines(parent_metadata / 'sources.jsonl')):
+            raise ValueError('Snapshot metadata differs from the reviewed parent')
+        with (root / 'data/processed' / PARENT / 'attractions.csv').open(encoding='utf-8', newline='') as stream:
+            previous = list(csv.DictReader(stream))
+        if len(previous) != len(rows):
+            raise ValueError('Unexpected entity count change')
+        for old, new in zip(previous, rows):
+            old['type_codes'] = json.loads(old['type_codes'])
+            old['source_refs'] = json.loads(old['source_refs'])
+            old['batch_id'] = BATCH
+            if inferred(old):
+                old['type_codes'] = [TYPE]
+                old['source_refs']['types'] = list(old['source_refs']['name'])
+            if old != new:
+                raise ValueError('Snapshot differs from reviewed name rule')
+        if manifest['quality']['missing_type_count'] != sum(not row['type_codes'] for row in rows):
+            raise ValueError('Type quality count mismatch')
     return dict(batch_id=batch_id, standard_count=len(rows), evidence_count=len(evidence),
                 sources_count=len(sources), input_count=len(manifest["raw_inputs"]),
                 comparable_prices=sum(bool(r["price_policy_id"]) for r in rows),
