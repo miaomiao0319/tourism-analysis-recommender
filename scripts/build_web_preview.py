@@ -37,7 +37,22 @@ def recordings():
         results["|".join((region, tag, mode, amount))] = response.get_json()
     details = {row["attraction_id"]: http.get("/api/v1/attractions/" + row["attraction_id"],
                query_string={"batch_id": BATCH}).get_json() for row in ROWS}
-    return dict(amounts=AMOUNTS, dataset=dataset, details=details, results=results)
+    lists = {}
+    for sort in ("name_asc", "price_asc", "price_desc"):
+        params = dict(batch_id=BATCH, sort=sort)
+        if sort != "name_asc":
+            params.update(currency=price["currency"], price_policy_id=price["id"])
+        lists[sort] = http.get("/api/v1/attractions", query_string=params).get_json()["data"]["items"]
+    stats = {}
+    for entry in dataset["data"]["available_statistics"]:
+        params = {k: v for k, v in entry.items() if v is not None}
+        if entry["scope"] == "city":
+            params["sort"] = "count_desc"
+        reply = http.get("/api/v1/statistics", query_string=dict(params, batch_id=BATCH))
+        if reply.status_code != 200:
+            raise ValueError(reply.get_json())
+        stats[entry["metric"] + "|" + entry["scope"]] = reply.get_json()["data"]["items"]
+    return dict(amounts=AMOUNTS, dataset=dataset, details=details, results=results, lists=lists, stats=stats)
 
 
 def main():

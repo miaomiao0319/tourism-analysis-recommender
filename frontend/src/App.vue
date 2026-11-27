@@ -1,6 +1,23 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 
+import SearchPage from './SearchPage.vue'
+import StatisticsPage from './StatisticsPage.vue'
+
+const titles = { recommend:'偏好推荐', search:'景点查询', statistics:'景点分布' }
+const descriptions = { recommend:'按地区、兴趣和单景点门票预算，找到想去的地方。',search:'按名称、地区和门票条件，查阅景点档案与资料来源。',statistics:'从省份到城市，查看景点数量、等级与可比门票。' }
+function locationView() { const key=location.hash.slice(1); return Object.hasOwn(titles,key)?key:'recommend' }
+const view = ref(locationView()), selectedProvince=ref('')
+function syncView() { view.value=locationView(); document.title=titles[view.value]+' · 山河图鉴' }
+function openProvince(key) { selectedProvince.value=key; location.hash='search' }
+function navigate(key) { if(key==='search')selectedProvince.value=''; location.hash=key }
+let lastRejectedBatch
+function reloadExplorerBatch() {
+  const id=meta.value?.batch_id
+  if(!id) return
+  if(id===lastRejectedBatch){ datasetError.value='服务批次持续变化，请稍后重新连接。'; return }
+  lastRejectedBatch=id;loadDataset(true)
+}
 const { client } = defineProps({ client: { type: Object, required: true } })
 const info = ref(null), meta = ref(null), result = ref(null)
 const region = ref(''), interest = ref(''), budget = ref('70'), mode = ref('balanced'), policy = ref('')
@@ -45,6 +62,7 @@ function resetResult() {
 watch([region, interest, budget, policy, mode], () => { resetResult(); note.value = '' }, { flush: 'sync' })
 
 async function loadDataset(refresh = false) {
+  if(!refresh)lastRejectedBatch=undefined
   detailId++
   resetResult()
   if (dialog.value?.open) dialog.value.close()
@@ -72,7 +90,7 @@ async function loadDataset(refresh = false) {
     }
     note.value = '数据批次已更新，已重新读取。'
   }
-  if (region.value || interest.value || (budget.value !== '' && currentPolicy.value)) await submit(false)
+  if (view.value === 'recommend' && (region.value || interest.value || (budget.value !== '' && currentPolicy.value))) await submit(false)
 }
 
 async function submit(retry = true) {
@@ -134,24 +152,28 @@ function safeLink(value) {
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) ? u.href : null } catch { return null }
 }
 function clearBudget() { budget.value = ''; nextTick(() => budgetInput.value?.focus()) }
-onMounted(() => loadDataset())
+onMounted(() => {syncView(); window.addEventListener('hashchange',syncView);loadDataset()})
+onBeforeUnmount(()=>window.removeEventListener('hashchange',syncView))
+watch(view, key=>{if(key==='recommend' && meta.value && !result.value && !busy.value && (region.value || interest.value || (budget.value!=='' && currentPolicy.value))) submit()})
 </script>
 
 <template>
   <header class="header"><div class="wrap mast">
     <a class="brand" href="#top" aria-label="山河图鉴，回到顶部"><span class="logo" aria-hidden="true"><i></i><b></b></span>山河图鉴</a>
-    <nav aria-label="页内导航"><a href="#filters" class="active">偏好推荐</a><a href="#results">推荐结果</a><button type="button" @click="showPanel('dataset')">数据说明</button></nav>
+    <nav aria-label="主导航"><a v-for="key in ['statistics','search','recommend']" :key="key" :href="'#'+key" :class="{active:view===key}" :aria-current="view===key?'page':undefined" @click.prevent="navigate(key)">{{titles[key]}}</a><button type="button" @click="showPanel('dataset')">数据说明</button></nav>
   </div></header>
   <main id="top">
     <section class="hero"><div class="wrap hero-inner">
-      <h1>偏好推荐</h1><p>按地区、兴趣和单景点门票预算，找到想去的地方。</p>
+      <h1>{{titles[view]}}</h1><p>{{descriptions[view]}}</p>
     </div></section>
     <div class="wrap">
       <div v-if="datasetError" role="alert" class="state"><h2>数据暂未就绪</h2><p>{{ datasetError }}</p><button class="secondary" @click="loadDataset()">重新连接</button></div>
       <div v-else-if="!info" class="state" role="status">正在读取数据批次…</div>
       <template v-else>
         <div class="data-strip"><span class="status" :class="{test}">{{ test ? '演示样本' : '已接入真实批次' }}</span><span>数据截至 {{ month }}</span><button @click="showPanel('dataset')">查看说明 <span aria-hidden="true">↗</span></button></div>
-        <form id="filters" class="filters" @submit.prevent="submit()">
+        <SearchPage v-if="view==='search'" :key="meta.batch_id+selectedProvince" :client="client" :info="info" :batch="meta.batch_id" :initial-province="selectedProvince" @detail="showDetail" @batch-change="reloadExplorerBatch"/>
+        <StatisticsPage v-else-if="view==='statistics'" :key="meta.batch_id" :client="client" :info="info" :batch="meta.batch_id" @province="openProvince" @batch-change="reloadExplorerBatch"/>
+        <template v-else><form id="filters" class="filters" @submit.prevent="submit()">
           <label>目的地区<select v-model="region"><option value="">全部地区</option><optgroup v-for="grp in regionGroups" :key="grp.name" :label="grp.name"><option v-for="r in grp.values" :key="r.key" :value="r.key">{{ r.name }}{{ r.level === 'province' ? ' · 全省级地区' : '' }}</option></optgroup></select></label>
           <label>兴趣类型<select v-model="interest"><option value="">不限兴趣</option><option v-for="t in dict.types" :key="t.code" :value="t.code">{{ t.label }}</option></select></label>
           <label>单景点门票预算
@@ -178,7 +200,7 @@ onMounted(() => loadDataset())
             <button class="text-link" @click="showDetail(item.attraction)">景点详情与来源 <span aria-hidden="true">↗</span></button>
           </article></div>
           <p v-for="w in result?.algorithm_info?.warnings || []" :key="w" class="notice">{{ w }}</p>
-        </section>
+        </section></template>
       </template>
     </div>
   </main>

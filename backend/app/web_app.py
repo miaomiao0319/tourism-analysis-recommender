@@ -10,6 +10,7 @@ from .errors import AppError, STATUS
 from .repositories.attractions import AttractionRepository
 from .repositories.error_adapter import RepositoryAdapter
 from .routes.recommendations import api, envelope
+from .routes.explorer import explorer
 from .services.recommender import RecommendationError
 
 
@@ -45,6 +46,7 @@ def create_app(config=None, repository=None):
     app.extensions["tourism_repository"] = RepositoryAdapter(
         repository, AppError, (pymysql.err.OperationalError, pymysql.err.InterfaceError))
     app.register_blueprint(api)
+    app.register_blueprint(explorer)
 
     @app.errorhandler(AppError)
     @app.errorhandler(RecommendationError)
