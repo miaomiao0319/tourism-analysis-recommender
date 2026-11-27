@@ -69,3 +69,16 @@ dialog::backdrop {background:#13271d77}.dialog-inner {padding:32px;position:rela
  .modes button {padding:5px 10px}.result-head>span {font-size:12px}.filters select {font-size:14px}.dialog-inner {padding:25px}
 }
 @media (prefers-reduced-motion:reduce) {html {scroll-behavior:auto}}
+
+.explore-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;align-items:end;margin:1.4rem 0 2rem}
+.explore-filters label,.chart-card label{display:grid;gap:6px;color:var(--muted);font-size:.88rem}
+.explore-filters input{height:46px;padding:0 12px;min-width:0;width:100%;background:#fcfbf6;border:1px solid #a9afa2;border-radius:5px}
+.list-table button{width:100%;text-align:left;border-bottom:1px solid var(--line);padding:.95rem .6rem;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.list-table button:hover,.region-links button:hover{background:#e8eee5}.list-table strong,.list-table small{display:block}.list-table strong{font:600 1.2rem var(--serif)}.list-table small{color:var(--muted);margin-top:4px}
+.pager{display:flex;align-items:baseline;justify-content:center;gap:18px}.chart-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:18px;margin:22px 0 30px}
+.chart-card{border:1px solid var(--line);border-radius:8px;padding:20px;background:#fcfbf5;min-width:0}.chart-card h2{font-size:1.55rem}
+.chart-card p,.chart-card small,.chart-card summary{font-size:.85rem;color:var(--muted);margin:6px 0}
+.chart-card summary{cursor:pointer;color:var(--green)}.region-links{display:flex;gap:5px;flex-wrap:wrap}.region-links button{padding:4px 7px;border:1px solid var(--line);border-radius:3px}
+.echart{height:240px;width:100%}.map-card .echart{height:290px}
+@media(max-width:760px){.chart-grid,.explore-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.chart-grid{grid-template-columns:1fr} .mast nav{gap:10px}}
+@media(max-width:440px){.mast{flex-wrap:wrap;gap:0;padding:9px 0 3px}.mast nav{width:100%;justify-content:space-between}.chart-card{padding:15px}}
