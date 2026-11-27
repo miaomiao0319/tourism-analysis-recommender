@@ -28,6 +28,10 @@ SPECS = {
         ("license", "/wiki/Wikidata:Licensing"),
         *[(qid, "/wiki/Special:EntityData/" + qid + ".json") for qid in
           ("Q16959", "Q571219", "Q573124", "Q989885", "Q874291", "Q571126", "Q1012419", "Q577713", "Q115594", "Q861035", "Q1012460")]], "CC0"),
+    "qianling_wikidata": ("https://www.wikidata.org", [
+        ("license", "/wiki/Wikidata:Licensing"),
+        ("Q950653", "/wiki/Special:EntityData/Q950653.json"),
+        ("Q1201675", "/wiki/Special:EntityData/Q1201675.json")], "CC0"),
     "voyage_prices": ("https://en.wikivoyage.org", [
         ("license", "/wiki/Wikivoyage:Copyleft"),
         ("jiuzhaigou", "/wiki/Jiuzhaigou_Nature_Reserve"),
