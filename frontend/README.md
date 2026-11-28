@@ -1,5 +1,13 @@
 # 山河图鉴 · 偏好推荐
 
+## Windows 双击启动
+
+Windows x64 用户克隆仓库后双击根目录的 `Start-Shanhe-Atlas.cmd`。首次启动需要联网，脚本会下载并校验 uv，安装 Python 与项目依赖并构建页面。若电脑没有兼容的 Node.js 和 npm，脚本也会下载并校验项目指定版本。工具和 Windows 虚拟环境保存在本项目的 `.runtime`，便于与 WSL 环境同时使用。
+
+新克隆没有 `.env` 时使用仓库自带的演示样本，可直接操作推荐、查询和统计，无需安装 MySQL。要使用真实数据，先准备可访问的 MySQL 和已导入的 ready 批次，再按下文配置 `.env`。Windows 启动器使用 TCP 连接 MySQL，WSL 的 Unix socket 配置继续用 WSL 启动入口。
+
+窗口显示网址后会尝试打开默认浏览器。保留命令窗口，按 Ctrl+C 停止服务。
+
 ## 先看页面
 
 交付包中的 `Shanhe_Atlas.html` 可以直接下载，用新版 Edge、Chrome、Firefox 或 Safari 打开。离线版提供 6 个预设预算和“不限预算”。每种地区、兴趣、排序和预算组合的结果都来自演示服务调用 B 的推荐模块后保存的响应。它使用 3 条构造样本，页面顶部标有“演示样本”。
@@ -23,7 +31,7 @@ npm --prefix frontend run build
 
 在可访问项目 MySQL 的机器上按根目录 `.env.example` 填写本机 `.env`。设置 DB_HOST、DB_PORT、DB_NAME、DB_USER、DB_PASSWORD 和 ACTIVE_BATCH_ID。若使用 A 的本机 Unix socket 账号，可像 A 的导入程序一样设置 DB_UNIX_SOCKET，并在有权限的系统用户下运行。使用 A 已校验的只读账号，数据库密码留在本机。
 
-A 的交接批次为 `atlas_clean_20261102_02`。在目标机确认批次仍为 ready 后运行下列命令。
+最终演示批次为 `atlas_clean_20261126_02`。在目标机确认批次为 ready 后运行下列命令。
 
 ```bash
 .venv/bin/python -m scripts.web
